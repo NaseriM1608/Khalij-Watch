@@ -88,7 +88,9 @@ class AisPosition(Base):
     # Required for attribution: aiscast re-serves per-source licences.
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
     plausibility_score: Mapped[float | None] = mapped_column(Float, index=True)
-    anomaly_flags: Mapped[list | None] = mapped_column(JSON)
+    # none_as_null: without it a clean row stores the JSON literal `null`,
+    # which still satisfies "IS NOT NULL" and silently breaks anomaly queries.
+    anomaly_flags: Mapped[list | None] = mapped_column(JSON(none_as_null=True))
 
     vessel: Mapped[Vessel] = relationship(back_populates="positions")
 
@@ -153,7 +155,7 @@ class Detection(Base):
     is_vessel_prob: Mapped[float | None] = mapped_column(Float)
     is_fishing_prob: Mapped[float | None] = mapped_column(Float)
     pred_class: Mapped[str | None] = mapped_column(String(24))
-    class_probs: Mapped[dict | None] = mapped_column(JSON)
+    class_probs: Mapped[dict | None] = mapped_column(JSON(none_as_null=True))
     chip_path: Mapped[str | None] = mapped_column(String(512))
     detector: Mapped[str] = mapped_column(String(64), nullable=False, default="cfar")
     detector_version: Mapped[str | None] = mapped_column(String(32))

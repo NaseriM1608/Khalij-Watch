@@ -346,3 +346,60 @@ async def test_consumer_records_sources_for_attribution(session_factory):
 
 async def _ready(socket):
     return socket
+
+
+async def test_spoofed_track_is_stored_with_its_flags(session_factory):
+    """A fabricated position is FLAGGED AND KEPT, never dropped.
+
+    In this AOI a falsified track is itself evidence: it identifies a vessel
+    actively concealing movement. Discarding it would destroy the signal.
+    """
+    from sqlalchemy import text
+
+    from core.ais.landmask import NoLandMask
+    from core.ais.plausibility import PlausibilityAnalyzer
+
+    queue: asyncio.Queue = asyncio.Queue()
+    # Two fixes ~550 km apart, 30 s apart: physically impossible.
+    await queue.put(("aisstream", position_envelope(lat=26.5, lon=56.5)))
+    await queue.put(("aisstream", position_envelope(lat=27.5, lon=51.0)))
+
+    consumer = IngestConsumer(
+        queue,
+        session_factory,
+        batch_size=2,
+        flush_interval_s=0.05,
+        analyzer=PlausibilityAnalyzer(land_mask=NoLandMask()),
+    )
+    task = asyncio.create_task(consumer.run())
+    await asyncio.sleep(0.3)
+    consumer.stop()
+    await asyncio.wait_for(task, timeout=5)
+
+    with session_scope(session_factory) as session:
+        # Both positions are retained.
+        assert PositionRepository(session).count() == 2
+        rows = session.execute(
+            text(
+                "SELECT plausibility_score, anomaly_flags FROM ais_positions "
+                "ORDER BY plausibility_score"
+            )
+        ).all()
+
+    worst_score, worst_flags = rows[0]
+    assert worst_score < 0.5
+    assert "TELEPORT" in worst_flags
+    assert consumer.stats.suspect == 1
+
+
+async def test_ordinary_traffic_is_scored_clean(session_factory):
+    queue: asyncio.Queue = asyncio.Queue()
+    await queue.put(("aisstream", position_envelope(lat=26.500, lon=56.500)))
+    consumer = IngestConsumer(queue, session_factory, batch_size=1, flush_interval_s=0.05)
+
+    task = asyncio.create_task(consumer.run())
+    await asyncio.sleep(0.25)
+    consumer.stop()
+    await asyncio.wait_for(task, timeout=5)
+
+    assert consumer.stats.suspect == 0

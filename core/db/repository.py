@@ -8,6 +8,8 @@ box, not for a particular SQL dialect's spatial predicate.
 from __future__ import annotations
 
 import datetime as dt
+import json
+from collections.abc import Sequence
 from dataclasses import dataclass
 
 from sqlalchemy import func, select, text
@@ -15,6 +17,7 @@ from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from core.ais.messages import AisPositionReport, VesselStatic, coarse_class
+from core.ais.plausibility import ScoredPosition
 from core.db.models import AisPosition, Vessel
 from core.db.spatial import BBox, bbox_filter_sql, bbox_params
 
@@ -84,6 +87,12 @@ class VesselFix:
     coarse_class: str | None
     source: str
     plausibility_score: float | None
+    anomaly_flags: list | None = None
+
+    @property
+    def is_suspect(self) -> bool:
+        """Below this the position contradicts itself or the geography."""
+        return self.plausibility_score is not None and self.plausibility_score < 0.5
 
     def age_seconds(self, now: dt.datetime) -> float:
         return max(0.0, (now - self.ts).total_seconds())
@@ -152,31 +161,17 @@ class PositionRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def add_batch(self, reports: list[AisPositionReport]) -> int:
+    def add_batch(self, reports: Sequence[AisPositionReport | ScoredPosition]) -> int:
         """Insert a batch of positions, ignoring exact duplicates.
 
-        The feed replays the same fix through multiple receivers, so duplicates
-        are normal and must not abort the batch. Returns the number of rows
-        actually written.
+        Accepts scored or unscored positions. The feed replays the same fix
+        through multiple receivers, so duplicates are normal and must not abort
+        the batch. Returns the number of rows actually written.
         """
         if not reports:
             return 0
 
-        rows = [
-            {
-                "ts": _as_utc(report.ts),
-                "mmsi": report.mmsi,
-                "lon": report.lon,
-                "lat": report.lat,
-                "sog_kn": report.sog_kn,
-                "cog_deg": report.cog_deg,
-                "heading_deg": report.heading_deg,
-                "nav_status": report.nav_status,
-                "msg_type": report.msg_type,
-                "source": report.source,
-            }
-            for report in reports
-        ]
+        rows = [_position_row(entry) for entry in reports]
         written = 0
         for chunk in _chunked(rows, AisPosition.__table__):
             stmt = (
@@ -222,7 +217,8 @@ class PositionRepository:
                 {age_clause}
             )
             SELECT c.mmsi, c.lon, c.lat, c.ts, c.sog_kn, c.cog_deg, c.heading_deg,
-                   c.source, c.plausibility_score, v.name, v.coarse_class
+                   c.source, c.plausibility_score, c.anomaly_flags,
+                   v.name, v.coarse_class
             FROM candidates c
             LEFT JOIN vessels v ON v.mmsi = c.mmsi
             WHERE c.rn = 1
@@ -255,6 +251,29 @@ class PositionRepository:
         return self._session.execute(stmt).rowcount or 0
 
 
+def _position_row(entry: AisPositionReport | ScoredPosition) -> dict:
+    """Flatten a position, scored or not, into a row."""
+    if isinstance(entry, ScoredPosition):
+        report, verdict = entry.report, entry.plausibility
+        score, flags = verdict.score, verdict.as_flags()
+    else:
+        report, score, flags = entry, None, None
+    return {
+        "ts": _as_utc(report.ts),
+        "mmsi": report.mmsi,
+        "lon": report.lon,
+        "lat": report.lat,
+        "sog_kn": report.sog_kn,
+        "cog_deg": report.cog_deg,
+        "heading_deg": report.heading_deg,
+        "nav_status": report.nav_status,
+        "msg_type": report.msg_type,
+        "source": report.source,
+        "plausibility_score": score,
+        "anomaly_flags": flags,
+    }
+
+
 def _to_fix(row) -> VesselFix:
     ts = row["ts"]
     if isinstance(ts, str):
@@ -274,4 +293,17 @@ def _to_fix(row) -> VesselFix:
         coarse_class=row["coarse_class"],
         source=row["source"],
         plausibility_score=row["plausibility_score"],
+        anomaly_flags=_decode_flags(row["anomaly_flags"]),
     )
+
+
+def _decode_flags(raw: object) -> list | None:
+    """SQLite returns the JSON column as text on a raw-SQL read."""
+    if raw is None:
+        return None
+    if isinstance(raw, list):
+        return raw
+    try:
+        return json.loads(raw)
+    except (TypeError, ValueError):
+        return None

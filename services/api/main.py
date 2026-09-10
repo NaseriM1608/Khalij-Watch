@@ -90,6 +90,9 @@ def _fix_to_json(fix: VesselFix, now: dt.datetime) -> dict[str, Any]:
         "coarse_class": fix.coarse_class,
         "source": fix.source,
         "plausibility_score": fix.plausibility_score,
+        # AIS in this AOI is adversarial; the UI must be able to show doubt.
+        "is_suspect": fix.is_suspect,
+        "anomaly_flags": fix.anomaly_flags,
     }
 
 
@@ -148,6 +151,7 @@ async def vessels(
         "bbox": _bbox_json(box),
         "count": len(fixes),
         "vessels": [_fix_to_json(f, now) for f in fixes],
+        "suspect_count": sum(1 for f in fixes if f.is_suspect),
         "attribution": sorted({f.source for f in fixes}),
     }
 

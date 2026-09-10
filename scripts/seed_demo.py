@@ -20,6 +20,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from core.ais.messages import AisPositionReport, VesselStatic
+from core.ais.plausibility import PlausibilityAnalyzer, ScoredPosition
 from core.db.repository import PositionRepository, VesselRepository
 from core.db.session import (
     create_all,
@@ -29,6 +30,10 @@ from core.db.session import (
 )
 
 SOURCE = "synthetic"
+
+# Real AIS position noise is tens of metres. Anything larger swamps the
+# displacement between fixes and makes honest vessels look like liars.
+NOISE_DEG = 0.0003  # about 33 m
 
 # The main deep-water route, Strait of Hormuz to the northern Gulf.
 SHIPPING_LANE = [
@@ -61,6 +66,9 @@ SHIP_TYPES = [
     (52, "service_tug", 0.12),
     (60, "passenger_other", 0.12),
 ]
+
+# Falsification patterns actually reported around the Strait in 2026.
+SPOOF_PROFILES = ("on_land", "teleport", "straight_line", "speed_lie")
 
 NAME_PREFIXES = ["AL", "GULF", "PACIFIC", "DESERT", "PEARL", "STAR", "OCEAN", "SEA"]
 NAME_SUFFIXES = ["VOYAGER", "PIONEER", "TRADER", "SPIRIT", "HORIZON", "GLORY", "DAWN"]
@@ -128,32 +136,92 @@ def _make_vessel(rng: random.Random, index: int) -> SimVessel:
 
 
 def _position_at(
-    vessel: SimVessel, step: int, total_steps: int, rng: random.Random
+    vessel: SimVessel,
+    step: int,
+    total_steps: int,
+    rng: random.Random,
+    interval_minutes: int,
 ) -> tuple[float, float, float]:
     if vessel.anchored and vessel.anchor is not None:
         # Swing gently around the anchor rather than sitting perfectly still.
+        # A real swing circle is chain-length scale, a few hundred metres.
         lon, lat = vessel.anchor
-        jitter = 0.012
+        jitter = 0.002
         angle = (step / max(total_steps, 1)) * math.tau + vessel.progress * math.tau
         return (
-            lon + math.cos(angle) * jitter + rng.uniform(-0.002, 0.002),
-            lat + math.sin(angle) * jitter + rng.uniform(-0.002, 0.002),
+            lon + math.cos(angle) * jitter + rng.uniform(-NOISE_DEG, NOISE_DEG),
+            lat + math.sin(angle) * jitter + rng.uniform(-NOISE_DEG, NOISE_DEG),
             (math.degrees(angle) + 90) % 360,
         )
 
-    # Roughly: 1 degree of latitude is 60 nautical miles.
-    lane_length_deg = 11.0
-    travelled = (vessel.speed_kn * step / 60.0) / (lane_length_deg * 60.0)
-    progress = (vessel.progress + vessel.direction * travelled) % 1.0
+    # Distance covered must follow ELAPSED TIME, not the step index. Getting
+    # this wrong makes a vessel report a speed its own track contradicts,
+    # which the plausibility filter then flags - correctly.
+    elapsed_hours = (step * interval_minutes) / 60.0
+    lane_length_nm = 11.0 * 60.0  # 1 degree of latitude is 60 nautical miles
+    travelled = (vessel.speed_kn * elapsed_hours) / lane_length_nm
+    # Bounce at the ends of the lane. Wrapping with % 1.0 would jump the
+    # vessel from Hormuz back to Kuwait in one step - a genuine teleport, and
+    # the plausibility filter would rightly flag it.
+    cycle = (vessel.progress + vessel.direction * travelled) % 2.0
+    progress = cycle if cycle <= 1.0 else 2.0 - cycle
     lon, lat, course = _interpolate_lane(progress)
     if vessel.direction < 0:
         course = (course + 180) % 360
-    return lon + rng.uniform(-0.01, 0.01), lat + rng.uniform(-0.01, 0.01), course
+    return (
+        lon + rng.uniform(-NOISE_DEG, NOISE_DEG),
+        lat + rng.uniform(-NOISE_DEG, NOISE_DEG),
+        course,
+    )
+
+
+def _spoof_track(
+    profile: str, mmsi: int, now: dt.datetime, steps: int, interval_minutes: int
+) -> list[AisPositionReport]:
+    """Build a deliberately falsified track for one vessel."""
+    reports: list[AisPositionReport] = []
+    for step in range(steps, -1, -1):
+        ts = now - dt.timedelta(minutes=step * interval_minutes)
+        index = steps - step
+
+        if profile == "on_land":
+            # Reporting from deep inside the Iranian plateau.
+            lon, lat, sog = 52.53 + index * 0.001, 29.60, 11.0
+        elif profile == "teleport":
+            # Alternates between the strait and the far northern Gulf.
+            lon, lat = (56.5, 26.5) if index % 2 == 0 else (49.5, 29.0)
+            sog = 12.0
+        elif profile == "straight_line":
+            # A perfectly interpolated line: no yaw, no drift at all.
+            lon, lat, sog = 53.00 + index * 0.05, 26.40, 13.0
+        else:  # speed_lie - claims to be stopped while clearly under way
+            lon, lat, sog = 55.00 + index * 0.03, 25.80, 0.0
+
+        reports.append(
+            AisPositionReport(
+                mmsi=mmsi,
+                ts=ts,
+                lon=round(lon, 6),
+                lat=round(lat, 6),
+                source=SOURCE,
+                sog_kn=sog,
+                cog_deg=90.0,
+                heading_deg=90.0,
+                nav_status=0,
+                msg_type=1,
+            )
+        )
+    return reports
 
 
 def seed(
-    *, vessel_count: int, hours: int, interval_minutes: int, seed_value: int
-) -> tuple[int, int]:
+    *,
+    vessel_count: int,
+    hours: int,
+    interval_minutes: int,
+    seed_value: int,
+    spoof_count: int = 4,
+) -> tuple[int, int, int]:
     rng = random.Random(seed_value)
     now = dt.datetime.now(dt.UTC).replace(microsecond=0)
     steps = max(1, (hours * 60) // interval_minutes)
@@ -166,11 +234,17 @@ def seed(
     create_all(engine)
     factory = make_session_factory(engine)
 
+    spoof_fleet: list[tuple[int, str, str]] = []
+    for index in range(spoof_count):
+        profile = SPOOF_PROFILES[index % len(SPOOF_PROFILES)]
+        mmsi = 422_900_000 + index
+        spoof_fleet.append((mmsi, profile, f"SUSPECT {profile.upper()} {index}"))
+
     reports: list[AisPositionReport] = []
     for vessel in fleet:
         for step in range(steps, -1, -1):
             ts = now - dt.timedelta(minutes=step * interval_minutes)
-            lon, lat, course = _position_at(vessel, steps - step, steps, rng)
+            lon, lat, course = _position_at(vessel, steps - step, steps, rng, interval_minutes)
             reports.append(
                 AisPositionReport(
                     mmsi=vessel.mmsi,
@@ -186,9 +260,18 @@ def seed(
                 )
             )
 
+    for mmsi, profile, _name in spoof_fleet:
+        reports.extend(_spoof_track(profile, mmsi, now, steps, interval_minutes))
+
+    # Score everything through the real analyser, exactly as live ingest does.
+    analyzer = PlausibilityAnalyzer()
+    scored = [ScoredPosition(r, analyzer.evaluate(r)) for r in reports]
+    suspect = sum(1 for s in scored if s.plausibility.is_suspect)
+
     with session_scope(factory) as session:
         vessels_repo = VesselRepository(session)
-        vessels_repo.ensure_exists({v.mmsi for v in fleet}, seen_at=now)
+        all_mmsis = {v.mmsi for v in fleet} | {m for m, _, _ in spoof_fleet}
+        vessels_repo.ensure_exists(all_mmsis, seen_at=now)
         session.flush()
         for vessel in fleet:
             vessels_repo.upsert_static(
@@ -201,10 +284,14 @@ def seed(
                 ),
                 seen_at=now,
             )
+        for mmsi, _profile, name in spoof_fleet:
+            vessels_repo.upsert_static(
+                VesselStatic(mmsi=mmsi, name=name, ship_type=80), seen_at=now
+            )
         session.flush()
-        written = PositionRepository(session).add_batch(reports)
+        written = PositionRepository(session).add_batch(scored)
 
-    return len(fleet), written
+    return len(fleet) + len(spoof_fleet), written, suspect
 
 
 def main() -> int:
@@ -213,15 +300,18 @@ def main() -> int:
     parser.add_argument("--hours", type=int, default=6)
     parser.add_argument("--interval-minutes", type=int, default=5)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--spoof", type=int, default=4, help="falsified vessels")
     args = parser.parse_args()
 
-    fleet_size, written = seed(
+    fleet_size, written, suspect = seed(
         vessel_count=args.vessels,
         hours=args.hours,
         interval_minutes=args.interval_minutes,
         seed_value=args.seed,
+        spoof_count=args.spoof,
     )
     print(f"seeded {fleet_size} vessels, {written} positions over {args.hours}h")
+    print(f"{suspect} positions scored as suspect by the plausibility filter")
     print(f'all rows tagged source="{SOURCE}" - they are NOT real observations')
     return 0
 

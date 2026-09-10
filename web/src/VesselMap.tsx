@@ -44,6 +44,7 @@ function toFeatureCollection(vessels: Vessel[]): GeoJSON.FeatureCollection {
         hasHeading: vessel.cog_deg != null || vessel.heading_deg != null,
         ageSeconds: vessel.age_seconds,
         moving: (vessel.sog_kn ?? 0) > 0.5,
+        suspect: vessel.is_suspect,
       },
     })),
   };
@@ -124,6 +125,23 @@ export function VesselMap({ vessels, track, selected, aoi, onSelect }: Props) {
           "line-color": "#ffffff",
           "line-width": 1.6,
           "line-opacity": 0.55,
+        },
+      });
+
+      // Contacts whose own report contradicts itself. Drawn first so the
+      // halo sits behind the vessel symbol rather than obscuring it.
+      instance.addLayer({
+        id: "vessel-suspect",
+        type: "circle",
+        source: VESSEL_SOURCE,
+        filter: ["get", "suspect"],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 7, 12, 15],
+          "circle-color": "#ff5c5c",
+          "circle-opacity": 0.18,
+          "circle-stroke-width": 1.2,
+          "circle-stroke-color": "#ff5c5c",
+          "circle-stroke-opacity": 0.8,
         },
       });
 

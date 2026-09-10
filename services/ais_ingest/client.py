@@ -60,6 +60,7 @@ class IngestStats:
     parsed: int = 0
     rejected: int = 0
     dropped_queue_full: int = 0
+    suspect: int = 0
     last_error: str | None = None
     sources_seen: set[str] = field(default_factory=set)
 
@@ -71,6 +72,7 @@ class IngestStats:
             "parsed": self.parsed,
             "rejected": self.rejected,
             "dropped_queue_full": self.dropped_queue_full,
+            "suspect": self.suspect,
             "last_error": self.last_error,
             "sources_seen": sorted(self.sources_seen),
         }

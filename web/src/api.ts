@@ -23,12 +23,33 @@ export interface Vessel {
   coarse_class: CoarseClass | null;
   source: string;
   plausibility_score: number | null;
+  /** AIS here is adversarial; the UI must be able to show doubt. */
+  is_suspect: boolean;
+  anomaly_flags: AnomalyFlag[] | null;
 }
+
+export interface AnomalyFlag {
+  code: string;
+  penalty: number;
+  detail: string;
+}
+
+export const ANOMALY_LABELS: Record<string, string> = {
+  ON_LAND: "Position on land",
+  TELEPORT: "Teleported between fixes",
+  IMPOSSIBLE_SPEED: "Impossible speed",
+  IMPOSSIBLE_TURN: "Impossible turn rate",
+  SPEED_MISMATCH: "Speed contradicts track",
+  DUPLICATE_IDENTITY: "Identity in two places",
+  COLLINEAR_TRACK: "Track impossibly straight",
+  MID_REGION_MISMATCH: "Flag inconsistent with position",
+};
 
 export interface VesselsResponse {
   generated_at: string;
   bbox: BBox;
   count: number;
+  suspect_count: number;
   vessels: Vessel[];
   /** Feed licences require attribution to reach the display. */
   attribution: string[];

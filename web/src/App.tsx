@@ -10,6 +10,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { VesselMap } from "./VesselMap";
 import {
+  ANOMALY_LABELS,
   BBox,
   CLASS_COLOURS,
   CLASS_LABELS,
@@ -41,6 +42,8 @@ export default function App() {
   const [maxAgeMinutes, setMaxAgeMinutes] = useState(360);
   const [error, setError] = useState<string | null>(null);
   const [attribution, setAttribution] = useState<string[]>([]);
+  const [suspectCount, setSuspectCount] = useState(0);
+  const [suspectOnly, setSuspectOnly] = useState(false);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
@@ -58,6 +61,7 @@ export default function App() {
         if (cancelled) return;
         setVessels(response.vessels);
         setAttribution(response.attribution);
+        setSuspectCount(response.suspect_count);
         setError(null);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
@@ -80,8 +84,11 @@ export default function App() {
   }, [selected]);
 
   const visible = useMemo(
-    () => vessels.filter((v) => !hidden.has(classOf(v))),
-    [vessels, hidden],
+    () =>
+      vessels.filter(
+        (v) => !hidden.has(classOf(v)) && (!suspectOnly || v.is_suspect),
+      ),
+    [vessels, hidden, suspectOnly],
   );
 
   const counts = useMemo(() => {
@@ -122,6 +129,28 @@ export default function App() {
             </span>
           </div>
         )}
+
+        <section className="panel">
+          <h2>Reported position integrity</h2>
+          <p className="hint">
+            AIS is self-reported and, in this region, frequently falsified.
+            Doubted contacts are kept and marked, never discarded &mdash; a
+            fabricated track is itself evidence.
+          </p>
+          <label className="legend">
+            <span
+              className={`suspect-row ${suspectCount ? "active" : ""}`}
+            >
+              <input
+                type="checkbox"
+                checked={suspectOnly}
+                onChange={() => setSuspectOnly((v) => !v)}
+              />
+              <span className="legend-label">Show only doubted contacts</span>
+              <span className="legend-count">{suspectCount}</span>
+            </span>
+          </label>
+        </section>
 
         <section className="panel">
           <h2>Vessel classes</h2>
@@ -287,6 +316,27 @@ function VesselDetail({
       </dl>
 
       {track?.sanctioned && <div className="banner banner-alert">Sanctioned vessel</div>}
+
+      {vessel.is_suspect && vessel.anomaly_flags && (
+        <div className="anomalies">
+          <h3>
+            Position doubted
+            {vessel.plausibility_score != null && (
+              <span className="score">
+                confidence {(vessel.plausibility_score * 100).toFixed(0)}%
+              </span>
+            )}
+          </h3>
+          <ul>
+            {vessel.anomaly_flags.map((flag) => (
+              <li key={flag.code}>
+                <strong>{ANOMALY_LABELS[flag.code] ?? flag.code}</strong>
+                <span>{flag.detail}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
 
       <p className="hint">
         Identity is self-reported over AIS and may be falsified. In this region

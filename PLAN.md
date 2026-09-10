@@ -1142,3 +1142,35 @@ approaches. 57.0 was simply wrong.
 2026-09-10, matching the research: Hormuz 28 acquisitions/30 d (**2.0 d mean
 revisit**), Central Gulf 20 (2.8 d), N Gulf 20 (3.2 d); constellation S1C+S1D
 only; every acquisition `IW_GRDH_1S` dual-pol VV+VH.
+
+### 2026-09-10 — Phase 1.5
+
+**Plausibility filter calibrated against synthetic spoofing.** Four falsification
+profiles modelled on Hormuz reporting (position on land, teleport, impossibly
+straight track, speed contradicting track) are all detected, at a **0.04%
+false-positive rate** on legitimate traffic (4 of 10,512 positions, all at
+course-reversal points).
+
+Three calibration lessons, each found by measurement rather than reasoning:
+
+1. **Straightness alone is not evidence.** A vessel on autopilot in a traffic
+   separation scheme genuinely travels a straight line for hours. With a 30 m
+   tolerance the check flagged 6,398 legitimate positions. The fix was to make
+   the test *"is this track mathematically impossible?"* rather than *"is this
+   track straight?"* - tolerance 5 m, below the real GPS noise floor. Because
+   the check became strong evidence, its penalty rose from 0.3 to 0.55.
+2. **Reported speed is instantaneous; implied speed is an average.** Comparing
+   them is only fair over a middle band of time gaps (60-900 s). Too short and
+   position noise dominates; too long and a legitimate speed change looks like
+   a lie.
+3. **The filter caught two bugs in the seeder**, which is the best evidence it
+   works: the simulator advanced vessels by step index rather than elapsed
+   time, and wrapped them from one end of the shipping lane to the other.
+
+**`JSON(none_as_null=True)`** - without it SQLAlchemy stores Python `None` as
+the JSON literal `null`, which still satisfies `IS NOT NULL` and silently
+breaks every anomaly query.
+
+**Policy confirmed in code:** implausible positions are flagged and kept, never
+dropped. A fabricated track identifies a vessel actively concealing movement,
+so discarding it would destroy the signal the product exists to find.
