@@ -36,3 +36,6 @@ web/dist/
 Thumbs.db
 .idea/
 .vscode/
+
+# Vite
+web/.vite/

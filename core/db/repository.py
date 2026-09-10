@@ -1,0 +1,277 @@
+"""Data access. The only place that queries tables directly.
+
+Keeping every query here is what makes the eventual PostGIS migration a
+contained change rather than a rewrite: callers ask for vessels in a bounding
+box, not for a particular SQL dialect's spatial predicate.
+"""
+
+from __future__ import annotations
+
+import datetime as dt
+from dataclasses import dataclass
+
+from sqlalchemy import func, select, text
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+from sqlalchemy.orm import Session
+
+from core.ais.messages import AisPositionReport, VesselStatic, coarse_class
+from core.db.models import AisPosition, Vessel
+from core.db.spatial import BBox, bbox_filter_sql, bbox_params
+
+# Positions are written in batches; a per-message round trip cannot keep up
+# with a busy feed.
+DEFAULT_BATCH_SIZE = 500
+
+# SQLAlchemy stores datetimes in SQLite as naive UTC text in exactly this
+# shape. Raw-SQL comparisons are therefore LEXICAL, so a bound value must match
+# the format byte for byte: an ISO string ("...T06:00:00+00:00") sorts before
+# every stored value because "T" > " ", silently matching nothing.
+_SQLITE_DATETIME_FORMAT = "%Y-%m-%d %H:%M:%S.%f"
+
+# Both SQLite and PostgreSQL cap the number of bound variables in one
+# statement (~32k and 65535 respectively). A multi-row INSERT binds
+# columns x rows, so a large batch must be split or the driver raises
+# "too many SQL variables". Chunk conservatively enough for either.
+MAX_BOUND_VARIABLES = 30_000
+
+
+def _chunked(rows: list[dict], table) -> list[list[dict]]:
+    """Split rows so no single statement exceeds the bind-variable limit.
+
+    The width is taken from the TABLE, not from the supplied dicts: SQLAlchemy
+    renders every column for each row in a multi-row INSERT, including ones the
+    caller omitted, so counting dict keys badly underestimates the real cost.
+    """
+    if not rows:
+        return []
+    width = max(len(table.columns), 1)
+    per_statement = max(1, MAX_BOUND_VARIABLES // width)
+    return [rows[i : i + per_statement] for i in range(0, len(rows), per_statement)]
+
+
+def _as_utc(value: dt.datetime) -> dt.datetime:
+    """Normalise to UTC. SQLite drops the offset, so this must happen first."""
+    if value.tzinfo is None:
+        return value.replace(tzinfo=dt.UTC)
+    return value.astimezone(dt.UTC)
+
+
+def _bind_timestamp(session: Session, value: dt.datetime) -> object:
+    """Render a timestamp for direct comparison in raw SQL."""
+    utc = _as_utc(value)
+    if session.get_bind().dialect.name == "sqlite":
+        return utc.replace(tzinfo=None).strftime(_SQLITE_DATETIME_FORMAT)
+    return utc
+
+
+# A contact older than this is stale for live-map purposes. It is still shown,
+# but the UI must render its age explicitly rather than implying it is current.
+DEFAULT_MAX_AGE = dt.timedelta(hours=6)
+
+
+@dataclass(frozen=True)
+class VesselFix:
+    """A vessel's most recent known position, for the live map."""
+
+    mmsi: int
+    lon: float
+    lat: float
+    ts: dt.datetime
+    sog_kn: float | None
+    cog_deg: float | None
+    heading_deg: float | None
+    name: str | None
+    coarse_class: str | None
+    source: str
+    plausibility_score: float | None
+
+    def age_seconds(self, now: dt.datetime) -> float:
+        return max(0.0, (now - self.ts).total_seconds())
+
+
+class VesselRepository:
+    """Vessel identities, built up from sparse AIS static messages."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def upsert_static(self, static: VesselStatic, *, seen_at: dt.datetime | None = None) -> None:
+        """Merge a static record, preserving fields it does not carry.
+
+        AIS type 24 arrives in two parts - Part A has the name, Part B the
+        type, call sign and dimensions - so a naive overwrite would erase
+        whichever half arrived first. Only non-None fields are applied.
+        """
+        values: dict[str, object] = {"mmsi": static.mmsi}
+        incoming = {
+            "name": static.name,
+            "callsign": static.callsign,
+            "imo": static.imo,
+            "ship_type": static.ship_type,
+            "length_m": static.length_m,
+            "beam_m": static.beam_m,
+            "coarse_class": coarse_class(static.ship_type),
+        }
+        values.update({k: v for k, v in incoming.items() if v is not None})
+        if seen_at is not None:
+            values["last_seen"] = seen_at
+
+        stmt = sqlite_insert(Vessel).values(**values)
+        # Only overwrite columns this message actually carried.
+        updatable = {k: getattr(stmt.excluded, k) for k in values if k != "mmsi"}
+        if updatable:
+            stmt = stmt.on_conflict_do_update(index_elements=["mmsi"], set_=updatable)
+        else:
+            stmt = stmt.on_conflict_do_nothing(index_elements=["mmsi"])
+        self._session.execute(stmt)
+
+    def ensure_exists(self, mmsis: set[int], *, seen_at: dt.datetime) -> None:
+        """Create placeholder rows so positions never violate the foreign key.
+
+        Positions routinely arrive before any static message for that vessel.
+        """
+        if not mmsis:
+            return
+        rows = [{"mmsi": mmsi, "first_seen": seen_at, "last_seen": seen_at} for mmsi in mmsis]
+        for chunk in _chunked(rows, Vessel.__table__):
+            stmt = (
+                sqlite_insert(Vessel).values(chunk).on_conflict_do_nothing(index_elements=["mmsi"])
+            )
+            self._session.execute(stmt)
+
+    def get(self, mmsi: int) -> Vessel | None:
+        return self._session.get(Vessel, mmsi)
+
+    def count(self) -> int:
+        return self._session.execute(select(func.count()).select_from(Vessel)).scalar_one()
+
+
+class PositionRepository:
+    """AIS position reports."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def add_batch(self, reports: list[AisPositionReport]) -> int:
+        """Insert a batch of positions, ignoring exact duplicates.
+
+        The feed replays the same fix through multiple receivers, so duplicates
+        are normal and must not abort the batch. Returns the number of rows
+        actually written.
+        """
+        if not reports:
+            return 0
+
+        rows = [
+            {
+                "ts": _as_utc(report.ts),
+                "mmsi": report.mmsi,
+                "lon": report.lon,
+                "lat": report.lat,
+                "sog_kn": report.sog_kn,
+                "cog_deg": report.cog_deg,
+                "heading_deg": report.heading_deg,
+                "nav_status": report.nav_status,
+                "msg_type": report.msg_type,
+                "source": report.source,
+            }
+            for report in reports
+        ]
+        written = 0
+        for chunk in _chunked(rows, AisPosition.__table__):
+            stmt = (
+                sqlite_insert(AisPosition)
+                .values(chunk)
+                .on_conflict_do_nothing(index_elements=["mmsi", "ts", "lon", "lat"])
+            )
+            written += self._session.execute(stmt).rowcount or 0
+        return written
+
+    def count(self) -> int:
+        return self._session.execute(select(func.count()).select_from(AisPosition)).scalar_one()
+
+    def latest_in_bbox(
+        self,
+        bbox: BBox,
+        *,
+        now: dt.datetime | None = None,
+        max_age: dt.timedelta | None = DEFAULT_MAX_AGE,
+        limit: int = 10_000,
+    ) -> list[VesselFix]:
+        """Most recent fix per vessel inside a bounding box.
+
+        This is the live map's primary query. The spatial index narrows
+        candidates first; the window function then picks one row per vessel.
+        """
+        now = now or dt.datetime.now(dt.UTC)
+        params = dict(bbox_params(bbox))
+        params["row_limit"] = limit
+
+        age_clause = ""
+        if max_age is not None:
+            params["cutoff"] = _bind_timestamp(self._session, now - max_age)
+            age_clause = "AND p.ts >= :cutoff"
+
+        sql = f"""
+            WITH candidates AS (
+                SELECT p.*, ROW_NUMBER() OVER (
+                    PARTITION BY p.mmsi ORDER BY p.ts DESC
+                ) AS rn
+                FROM ais_positions p
+                WHERE p.id IN ({bbox_filter_sql("ais_positions")})
+                {age_clause}
+            )
+            SELECT c.mmsi, c.lon, c.lat, c.ts, c.sog_kn, c.cog_deg, c.heading_deg,
+                   c.source, c.plausibility_score, v.name, v.coarse_class
+            FROM candidates c
+            LEFT JOIN vessels v ON v.mmsi = c.mmsi
+            WHERE c.rn = 1
+            ORDER BY c.ts DESC
+            LIMIT :row_limit
+        """
+        rows = self._session.execute(text(sql), params).mappings().all()
+        return [_to_fix(row) for row in rows]
+
+    def track(
+        self,
+        mmsi: int,
+        *,
+        since: dt.datetime | None = None,
+        until: dt.datetime | None = None,
+        limit: int = 5_000,
+    ) -> list[AisPosition]:
+        """One vessel's positions, oldest first, for drawing a trail."""
+        stmt = select(AisPosition).where(AisPosition.mmsi == mmsi)
+        if since is not None:
+            stmt = stmt.where(AisPosition.ts >= since)
+        if until is not None:
+            stmt = stmt.where(AisPosition.ts <= until)
+        stmt = stmt.order_by(AisPosition.ts).limit(limit)
+        return list(self._session.execute(stmt).scalars().all())
+
+    def delete_older_than(self, cutoff: dt.datetime) -> int:
+        """Retention. Positions are cheap but not free; trim the tail."""
+        stmt = AisPosition.__table__.delete().where(AisPosition.ts < cutoff)
+        return self._session.execute(stmt).rowcount or 0
+
+
+def _to_fix(row) -> VesselFix:
+    ts = row["ts"]
+    if isinstance(ts, str):
+        ts = dt.datetime.fromisoformat(ts)
+    if ts.tzinfo is None:
+        # SQLite has no native timestamptz; values return naive but are UTC.
+        ts = ts.replace(tzinfo=dt.UTC)
+    return VesselFix(
+        mmsi=row["mmsi"],
+        lon=row["lon"],
+        lat=row["lat"],
+        ts=ts,
+        sog_kn=row["sog_kn"],
+        cog_deg=row["cog_deg"],
+        heading_deg=row["heading_deg"],
+        name=row["name"],
+        coarse_class=row["coarse_class"],
+        source=row["source"],
+        plausibility_score=row["plausibility_score"],
+    )

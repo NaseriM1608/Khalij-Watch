@@ -14,6 +14,7 @@ from pathlib import Path
 
 from sqlalchemy import Engine, create_engine, event
 from sqlalchemy.orm import Session, sessionmaker
+from sqlalchemy.pool import StaticPool
 
 from core.db.models import Base
 
@@ -55,14 +56,18 @@ def create_db_engine(url: str | None = None, *, echo: bool = False) -> Engine:
     """Build an engine with dialect-appropriate settings."""
     resolved = url or database_url()
     is_sqlite = resolved.startswith("sqlite")
-    engine = create_engine(
-        resolved,
-        echo=echo,
-        future=True,
-        # A file-backed SQLite database is used from several threads (ingest
-        # worker plus API), so the default same-thread check must be relaxed.
-        connect_args={"check_same_thread": False} if is_sqlite else {},
-    )
+    kwargs: dict[str, object] = {"echo": echo, "future": True}
+    if is_sqlite:
+        # The database is touched from several threads (ingest worker plus the
+        # API), so the default same-thread check must be relaxed.
+        kwargs["connect_args"] = {"check_same_thread": False}
+        if ":memory:" in resolved:
+            # An in-memory database belongs to its CONNECTION. With a normal
+            # pool, a second connection sees an empty schema, which surfaces
+            # as a baffling "no such table". StaticPool keeps one connection
+            # so the database behaves as a single shared store.
+            kwargs["poolclass"] = StaticPool
+    engine = create_engine(resolved, **kwargs)
     if is_sqlite:
         _apply_sqlite_pragmas(engine)
     return engine

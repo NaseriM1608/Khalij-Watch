@@ -1,0 +1,190 @@
+/* Dark operational console. Dense, low-chrome, built for long viewing. */
+
+:root {
+  --bg: #080b11;
+  --panel: #0e131c;
+  --panel-2: #131a26;
+  --line: #1e2836;
+  --text: #dbe3ef;
+  --muted: #8996ab;
+  --accent: #4aa3ff;
+  --warn: #f0a24a;
+  --alert: #ff5c5c;
+  color-scheme: dark;
+}
+
+* { box-sizing: border-box; }
+
+html, body, #root { height: 100%; margin: 0; }
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font: 13px/1.5 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+
+.app {
+  display: grid;
+  grid-template-columns: 290px 1fr 0;
+  height: 100%;
+  transition: grid-template-columns 160ms ease;
+}
+.app:has(.context.open) { grid-template-columns: 290px 1fr 320px; }
+
+/* ---------------------------------------------------------------- rail -- */
+
+.rail {
+  background: var(--panel);
+  border-right: 1px solid var(--line);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+}
+
+.brand { padding: 16px; border-bottom: 1px solid var(--line); }
+.brand h1 { margin: 0; font-size: 15px; letter-spacing: 0.02em; font-weight: 600; }
+.brand p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
+
+.panel { padding: 14px 16px; border-bottom: 1px solid var(--line); }
+.panel h2 {
+  margin: 0 0 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.hint { margin: 0 0 10px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+.legend { list-style: none; margin: 0; padding: 0; }
+.legend li + li { margin-top: 2px; }
+.legend label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 6px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.legend label:hover { background: var(--panel-2); }
+.legend-label { flex: 1; }
+.legend-count { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 11px; }
+
+.swatch {
+  width: 9px;
+  height: 9px;
+  border-radius: 2px;
+  flex: none;
+  display: inline-block;
+}
+
+.slider { display: block; }
+.slider input { width: 100%; accent-color: var(--accent); }
+.slider span { color: var(--muted); font-size: 11px; }
+
+.stats { margin: 0; display: grid; grid-template-columns: 1fr 1fr; gap: 8px 10px; }
+.stats.stacked { grid-template-columns: 1fr; gap: 7px; }
+.stats div { min-width: 0; }
+.stats dt {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+.stats dd {
+  margin: 1px 0 0;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.attribution {
+  margin-top: auto;
+  padding: 12px 16px;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.5;
+  border-top: 1px solid var(--line);
+}
+
+.error { color: var(--alert); font-size: 11px; margin: 8px 0 0; }
+
+.banner {
+  margin: 12px 16px;
+  padding: 10px 12px;
+  border-radius: 5px;
+  font-size: 11px;
+  line-height: 1.5;
+  display: grid;
+  gap: 3px;
+}
+.banner-warn {
+  background: rgba(240, 162, 74, 0.1);
+  border: 1px solid rgba(240, 162, 74, 0.35);
+  color: #ffd8a8;
+}
+.banner-alert {
+  background: rgba(255, 92, 92, 0.12);
+  border: 1px solid rgba(255, 92, 92, 0.4);
+  color: #ffb3b3;
+  margin: 12px 0;
+  text-align: center;
+  font-weight: 600;
+}
+
+/* ----------------------------------------------------------------- map -- */
+
+.stage { position: relative; min-width: 0; }
+.map { position: absolute; inset: 0; }
+.maplibregl-ctrl-attrib { font-size: 10px; }
+
+/* ------------------------------------------------------------- context -- */
+
+.context {
+  background: var(--panel);
+  border-left: 1px solid var(--line);
+  overflow-y: auto;
+  overflow-x: hidden;
+}
+.context:not(.open) { border-left: none; }
+
+.empty { padding: 20px 16px; color: var(--muted); }
+.empty h2 { font-size: 12px; margin: 0 0 6px; color: var(--text); }
+.empty p { margin: 0; font-size: 11px; }
+
+.detail { padding: 16px; position: relative; }
+.detail h2 { margin: 0 4px 4px 0; font-size: 15px; font-weight: 600; }
+.subtitle {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 12px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.age-badge {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 7px 10px;
+  font-size: 11px;
+  margin-bottom: 14px;
+  color: var(--text);
+}
+
+.close {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  background: none;
+  border: none;
+  color: var(--muted);
+  font-size: 20px;
+  line-height: 1;
+  cursor: pointer;
+  padding: 2px 6px;
+  border-radius: 4px;
+}
+.close:hover { background: var(--panel-2); color: var(--text); }
