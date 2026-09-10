@@ -1,0 +1,38 @@
+# Secrets
+.env
+*.key
+*.pem
+
+# Data — large, regenerable, and process-and-discard by design
+data/
+models/*.onnx
+models/*.pt
+models/*.pth
+*.SAFE/
+*.tif
+*.tiff
+*.zip
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+dist/
+build/
+*.egg-info/
+
+# Node
+node_modules/
+web/dist/
+
+# OS / editors
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
