@@ -18,7 +18,7 @@ from sqlalchemy.orm import Session
 
 from core.ais.messages import AisPositionReport, VesselStatic, coarse_class
 from core.ais.plausibility import ScoredPosition
-from core.db.models import AisPosition, Vessel
+from core.db.models import AisPosition, SarScene, Vessel
 from core.db.spatial import BBox, bbox_filter_sql, bbox_params
 
 # Positions are written in batches; a per-message round trip cannot keep up
@@ -307,3 +307,95 @@ def _decode_flags(raw: object) -> list | None:
         return json.loads(raw)
     except (TypeError, ValueError):
         return None
+
+
+class SceneRepository:
+    """Catalogued SAR scenes.
+
+    Only metadata is stored. Pixels are read through a window when needed and
+    never persisted: a full-Gulf coverage is ~25 GB of raw imagery, and the
+    project's whole storage strategy is process-and-discard.
+    """
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def upsert(self, product, *, status: str = "discovered") -> bool:
+        """Record a catalogued product. Returns True if it was new."""
+        existing = self._session.execute(
+            select(SarScene.id).where(SarScene.product_id == product.product_id)
+        ).scalar_one_or_none()
+
+        values = {
+            "product_id": product.product_id,
+            "product_name": product.name,
+            "satellite": product.satellite,
+            "mode": product.mode,
+            "polarisation": product.polarisation,
+            "acq_time": _as_utc(product.acq_start),
+            "orbit_direction": product.orbit_direction,
+            "min_lon": product.bbox.min_lon,
+            "min_lat": product.bbox.min_lat,
+            "max_lon": product.bbox.max_lon,
+            "max_lat": product.bbox.max_lat,
+            "footprint_wkt": _ring_to_wkt(product.footprint),
+            "cog_url": product.s3_path,
+            "status": status,
+        }
+        stmt = (
+            sqlite_insert(SarScene)
+            .values(**values)
+            .on_conflict_do_update(
+                index_elements=["product_id"],
+                set_={k: v for k, v in values.items() if k != "product_id"},
+            )
+        )
+        self._session.execute(stmt)
+        return existing is None
+
+    def count(self) -> int:
+        return self._session.execute(select(func.count()).select_from(SarScene)).scalar_one()
+
+    def intersecting(
+        self,
+        bbox: BBox,
+        *,
+        since: dt.datetime | None = None,
+        limit: int = 500,
+    ) -> list[SarScene]:
+        """Scenes whose footprint overlaps a bbox, newest first."""
+        params = dict(bbox_params(bbox))
+        params["row_limit"] = limit
+        since_clause = ""
+        if since is not None:
+            params["since"] = _bind_timestamp(self._session, since)
+            since_clause = "AND acq_time >= :since"
+
+        sql = f"""
+            SELECT * FROM sar_scenes
+            WHERE id IN ({bbox_filter_sql("sar_scenes")})
+            {since_clause}
+            ORDER BY acq_time DESC
+            LIMIT :row_limit
+        """
+        rows = self._session.execute(text(sql), params).mappings().all()
+        return [self._session.get(SarScene, row["id"]) for row in rows]
+
+    def latest_acquisition(self, bbox: BBox) -> dt.datetime | None:
+        """When this area was last observed by radar.
+
+        Drives the coverage-honesty overlay: where this is old or absent, the
+        platform is blind and must say so.
+        """
+        scenes = self.intersecting(bbox, limit=1)
+        if not scenes:
+            return None
+        acq = scenes[0].acq_time
+        return acq if acq.tzinfo else acq.replace(tzinfo=dt.UTC)
+
+
+def _ring_to_wkt(ring: list[tuple[float, float]]) -> str | None:
+    if not ring:
+        return None
+    points = ", ".join(f"{lon} {lat}" for lon, lat in ring)
+    return f"POLYGON(({points}))"

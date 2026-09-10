@@ -16,10 +16,12 @@ import {
   CLASS_LABELS,
   CoarseClass,
   Health,
+  ScenesResponse,
   Track,
   Vessel,
   api,
   classOf,
+  coverageColour,
   formatAge,
 } from "./api";
 
@@ -44,6 +46,8 @@ export default function App() {
   const [attribution, setAttribution] = useState<string[]>([]);
   const [suspectCount, setSuspectCount] = useState(0);
   const [suspectOnly, setSuspectOnly] = useState(false);
+  const [coverage, setCoverage] = useState<ScenesResponse | null>(null);
+  const [showCoverage, setShowCoverage] = useState(true);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
@@ -51,6 +55,7 @@ export default function App() {
       .aoi()
       .then((r) => setAoi(r.gulf))
       .catch(() => undefined);
+    api.scenes(14).then(setCoverage).catch(() => undefined);
   }, []);
 
   useEffect(() => {
@@ -153,6 +158,52 @@ export default function App() {
         </section>
 
         <section className="panel">
+          <h2>Radar coverage</h2>
+          <p className="hint">
+            Sentinel-1 is not live. It sees everything, including vessels that
+            broadcast nothing &mdash; but only when a satellite passes. Where
+            the map is unshaded, nothing has looked recently.
+          </p>
+          <label className="legend">
+            <span className="suspect-row">
+              <input
+                type="checkbox"
+                checked={showCoverage}
+                onChange={() => setShowCoverage((v) => !v)}
+              />
+              <span className="legend-label">Show radar footprints</span>
+              <span className="legend-count">{coverage?.count ?? 0}</span>
+            </span>
+          </label>
+          <ul className="legend coverage-key">
+            {[
+              [12, "under 12h"],
+              [48, "12h – 2d"],
+              [120, "2 – 5d"],
+              [999, "over 5d"],
+            ].map(([hours, label]) => (
+              <li key={String(label)}>
+                <span
+                  className="swatch"
+                  style={{ background: coverageColour(Number(hours) - 1) }}
+                />
+                <span className="legend-label">{label}</span>
+              </li>
+            ))}
+          </ul>
+          {coverage?.last_look && (
+            <p className="hint last-look">
+              Last radar look{" "}
+              {formatAge(
+                (Date.now() - new Date(coverage.last_look).getTime()) / 1000,
+              )}
+              {coverage.satellites.length > 0 &&
+                ` · ${coverage.satellites.join(", ")}`}
+            </p>
+          )}
+        </section>
+
+        <section className="panel">
           <h2>Vessel classes</h2>
           <p className="hint">
             Class comes from AIS, not from imagery. Radar cannot tell a tanker
@@ -219,6 +270,10 @@ export default function App() {
               <dd>{health?.positions.toLocaleString() ?? "—"}</dd>
             </div>
             <div>
+              <dt>Radar scenes</dt>
+              <dd>{health?.sar_scenes.toLocaleString() ?? "—"}</dd>
+            </div>
+            <div>
               <dt>Live feeds</dt>
               <dd>{health?.live_feeds.length ? health.live_feeds.join(", ") : "none"}</dd>
             </div>
@@ -236,6 +291,7 @@ export default function App() {
       <main className="stage">
         <VesselMap
           vessels={visible}
+          scenes={showCoverage ? (coverage?.scenes ?? []) : []}
           track={track?.points ?? null}
           selected={selected}
           aoi={aoi}

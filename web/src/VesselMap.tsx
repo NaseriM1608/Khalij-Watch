@@ -12,7 +12,14 @@
 import { useEffect, useRef } from "react";
 import maplibregl, { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { BBox, CLASS_COLOURS, Vessel, classOf } from "./api";
+import {
+  BBox,
+  CLASS_COLOURS,
+  SarScene,
+  Vessel,
+  classOf,
+  coverageColour,
+} from "./api";
 
 // CARTO's dark basemap needs no API key and suits an operational console.
 const BASEMAP =
@@ -20,9 +27,11 @@ const BASEMAP =
 
 const VESSEL_SOURCE = "vessels";
 const TRACK_SOURCE = "track";
+const SCENE_SOURCE = "scenes";
 
 interface Props {
   vessels: Vessel[];
+  scenes: SarScene[];
   track: { lon: number; lat: number }[] | null;
   selected: number | null;
   aoi: BBox | null;
@@ -70,7 +79,14 @@ function bboxToPolygon(bbox: BBox): GeoJSON.Feature {
   };
 }
 
-export function VesselMap({ vessels, track, selected, aoi, onSelect }: Props) {
+export function VesselMap({
+  vessels,
+  scenes,
+  track,
+  selected,
+  aoi,
+  onSelect,
+}: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
   const ready = useRef(false);
@@ -101,9 +117,32 @@ export function VesselMap({ vessels, track, selected, aoi, onSelect }: Props) {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
       });
+      instance.addSource(SCENE_SOURCE, {
+        type: "geojson",
+        data: { type: "FeatureCollection", features: [] },
+      });
       instance.addSource("aoi", {
         type: "geojson",
         data: { type: "FeatureCollection", features: [] },
+      });
+
+      // Radar coverage sits at the very bottom: it is context for everything
+      // above it, and shows WHERE the platform can see at all.
+      instance.addLayer({
+        id: "scene-fill",
+        type: "fill",
+        source: SCENE_SOURCE,
+        paint: { "fill-color": ["get", "colour"], "fill-opacity": 0.1 },
+      });
+      instance.addLayer({
+        id: "scene-outline",
+        type: "line",
+        source: SCENE_SOURCE,
+        paint: {
+          "line-color": ["get", "colour"],
+          "line-width": 0.9,
+          "line-opacity": 0.55,
+        },
       });
 
       instance.addLayer({
@@ -225,6 +264,26 @@ export function VesselMap({ vessels, track, selected, aoi, onSelect }: Props) {
     const source = instance.getSource(VESSEL_SOURCE) as maplibregl.GeoJSONSource;
     source?.setData(toFeatureCollection(vessels));
   }, [vessels]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !ready.current) return;
+    const source = instance.getSource(SCENE_SOURCE) as maplibregl.GeoJSONSource;
+    source?.setData({
+      type: "FeatureCollection",
+      features: scenes
+        .filter((scene) => scene.footprint.length > 3)
+        .map((scene) => ({
+          type: "Feature",
+          properties: {
+            id: scene.id,
+            colour: coverageColour(scene.age_hours),
+            ageHours: scene.age_hours,
+          },
+          geometry: { type: "Polygon", coordinates: [scene.footprint] },
+        })),
+    });
+  }, [scenes]);
 
   useEffect(() => {
     const instance = map.current;

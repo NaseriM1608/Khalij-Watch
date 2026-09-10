@@ -62,10 +62,33 @@ export interface BBox {
   max_lat: number;
 }
 
+export interface SarScene {
+  id: number;
+  product_name: string;
+  satellite: string;
+  polarisation: string;
+  orbit_direction: string | null;
+  acq_time: string;
+  /** Hours since acquisition. Radar is not live; this says how stale it is. */
+  age_hours: number;
+  status: string;
+  footprint: [number, number][];
+}
+
+export interface ScenesResponse {
+  count: number;
+  scenes: SarScene[];
+  /** When this area was last observed by radar at all. */
+  last_look: string | null;
+  satellites: string[];
+  attribution: string;
+}
+
 export interface Health {
   status: string;
   vessels: number;
   positions: number;
+  sar_scenes: number;
   live_feeds: string[];
   has_live_ais: boolean;
 }
@@ -114,7 +137,16 @@ export const api = {
   },
   track: (mmsi: number, hours = 24) =>
     getJson<Track>(`/api/vessels/${mmsi}/track?hours=${hours}`),
+  scenes: (days = 14) => getJson<ScenesResponse>(`/api/scenes?days=${days}`),
 };
+
+/** Colour a radar footprint by how long ago it was acquired. */
+export function coverageColour(ageHours: number): string {
+  if (ageHours < 12) return "#3ad6a8";
+  if (ageHours < 48) return "#4aa3ff";
+  if (ageHours < 120) return "#8a7de8";
+  return "#5a6274";
+}
 
 /** Human-readable age. The UI states this rather than implying freshness. */
 export function formatAge(seconds: number): string {

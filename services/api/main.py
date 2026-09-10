@@ -24,9 +24,15 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import load_settings
-from core.db.repository import PositionRepository, VesselFix, VesselRepository
+from core.db.repository import (
+    PositionRepository,
+    SceneRepository,
+    VesselFix,
+    VesselRepository,
+)
 from core.db.session import create_all, create_db_engine, make_session_factory, session_scope
 from core.db.spatial import BBox
+from core.sar.catalogue import parse_polygon_wkt
 
 logger = logging.getLogger(__name__)
 
@@ -102,10 +108,12 @@ async def health() -> dict[str, Any]:
     with session_scope(_sessions()) as session:
         vessels = VesselRepository(session).count()
         positions = PositionRepository(session).count()
+        scenes_known = SceneRepository(session).count()
     return {
         "status": "ok",
         "vessels": vessels,
         "positions": positions,
+        "sar_scenes": scenes_known,
         "live_feeds": settings.describe_feeds() if settings else [],
         # Surfaced so the UI can warn when it is showing seeded, not live, data.
         "has_live_ais": bool(settings and settings.has_live_ais),
@@ -189,6 +197,64 @@ async def track(
             ],
         }
     return payload
+
+
+@app.get("/api/scenes")
+async def scenes(
+    bbox: str | None = Query(default=None),
+    days: int = Query(default=14, ge=1, le=365),
+    limit: int = Query(default=300, ge=1, le=2000),
+) -> dict[str, Any]:
+    """Radar scenes covering an area, newest first.
+
+    This is the coverage-honesty layer. Where no recent scene exists the
+    platform is blind, and the UI must be able to say so rather than implying
+    the absence of detections means the absence of vessels.
+    """
+    box = _parse_bbox(bbox)
+    now = dt.datetime.now(dt.UTC)
+    since = now - dt.timedelta(days=days)
+
+    with session_scope(_sessions()) as session:
+        found = SceneRepository(session).intersecting(box, since=since, limit=limit)
+        payload = [
+            {
+                "id": scene.id,
+                "product_name": scene.product_name,
+                "satellite": scene.satellite,
+                "polarisation": scene.polarisation,
+                "orbit_direction": scene.orbit_direction,
+                "acq_time": _iso_utc(scene.acq_time),
+                "age_hours": round((now - _utc(scene.acq_time)).total_seconds() / 3600, 1),
+                "status": scene.status,
+                "footprint": parse_polygon_wkt(scene.footprint_wkt),
+                "bbox": {
+                    "min_lon": scene.min_lon,
+                    "min_lat": scene.min_lat,
+                    "max_lon": scene.max_lon,
+                    "max_lat": scene.max_lat,
+                },
+            }
+            for scene in found
+        ]
+
+    newest = max((s["acq_time"] for s in payload), default=None)
+    return {
+        "generated_at": now.isoformat(),
+        "count": len(payload),
+        "scenes": payload,
+        "last_look": newest,
+        "satellites": sorted({s["satellite"] for s in payload}),
+        "attribution": "Contains modified Copernicus Sentinel data",
+    }
+
+
+def _utc(value: dt.datetime) -> dt.datetime:
+    return value if value.tzinfo else value.replace(tzinfo=dt.UTC)
+
+
+def _iso_utc(value: dt.datetime) -> str:
+    return _utc(value).isoformat()
 
 
 @app.websocket("/ws/stream")

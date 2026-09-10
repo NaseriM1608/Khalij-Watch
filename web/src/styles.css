@@ -233,3 +233,14 @@ body {
 .anomalies li { display: grid; gap: 2px; }
 .anomalies strong { font-size: 11px; color: var(--text); font-weight: 600; }
 .anomalies span { font-size: 10px; color: var(--muted); line-height: 1.45; }
+
+.coverage-key { margin-top: 8px; }
+.coverage-key li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 2px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.last-look { margin: 10px 0 0; color: var(--text); font-size: 11px; }

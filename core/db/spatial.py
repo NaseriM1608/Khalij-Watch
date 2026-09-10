@@ -73,23 +73,34 @@ class BBox:
         )
 
 
+def _sync_body(rtree: str, values: str) -> str:
+    """Body that refreshes one R*Tree row.
+
+    Explicit DELETE then INSERT, NOT ``INSERT OR REPLACE``: an R*Tree is a
+    virtual table and does not honour REPLACE conflict resolution, so the
+    OR REPLACE form raises a UNIQUE violation instead of overwriting. This
+    bites specifically on an upsert, because SQLite fires the AFTER INSERT
+    trigger even when the statement took the DO UPDATE path.
+    """
+    return (
+        f"DELETE FROM {rtree} WHERE id = NEW.id; "
+        f"INSERT INTO {rtree}(id, min_lon, max_lon, min_lat, max_lat) VALUES ({values});"
+    )
+
+
 def _point_rtree_ddl(table: str, lon_col: str, lat_col: str) -> list[str]:
     rtree = f"{table}_rtree"
+    # A point is a degenerate box, so min and max are the same column.
+    values = f"NEW.id, NEW.{lon_col}, NEW.{lon_col}, NEW.{lat_col}, NEW.{lat_col}"
+    guard = f"WHEN NEW.{lon_col} IS NOT NULL AND NEW.{lat_col} IS NOT NULL"
     return [
         f"CREATE VIRTUAL TABLE IF NOT EXISTS {rtree} "
         f"USING rtree(id, min_lon, max_lon, min_lat, max_lat)",
-        # A point is a degenerate box, so min and max are the same column.
-        f"""CREATE TRIGGER IF NOT EXISTS {table}_rtree_ai AFTER INSERT ON {table}
-            WHEN NEW.{lon_col} IS NOT NULL AND NEW.{lat_col} IS NOT NULL BEGIN
-              INSERT OR REPLACE INTO {rtree}(id, min_lon, max_lon, min_lat, max_lat)
-              VALUES (NEW.id, NEW.{lon_col}, NEW.{lon_col}, NEW.{lat_col}, NEW.{lat_col});
-            END""",
-        f"""CREATE TRIGGER IF NOT EXISTS {table}_rtree_au AFTER UPDATE ON {table}
-            WHEN NEW.{lon_col} IS NOT NULL AND NEW.{lat_col} IS NOT NULL BEGIN
-              INSERT OR REPLACE INTO {rtree}(id, min_lon, max_lon, min_lat, max_lat)
-              VALUES (NEW.id, NEW.{lon_col}, NEW.{lon_col}, NEW.{lat_col}, NEW.{lat_col});
-            END""",
-        f"""CREATE TRIGGER IF NOT EXISTS {table}_rtree_ad AFTER DELETE ON {table} BEGIN
+        f"""CREATE TRIGGER {table}_rtree_ai AFTER INSERT ON {table}
+            {guard} BEGIN {_sync_body(rtree, values)} END""",
+        f"""CREATE TRIGGER {table}_rtree_au AFTER UPDATE ON {table}
+            {guard} BEGIN {_sync_body(rtree, values)} END""",
+        f"""CREATE TRIGGER {table}_rtree_ad AFTER DELETE ON {table} BEGIN
               DELETE FROM {rtree} WHERE id = OLD.id;
             END""",
     ]
@@ -102,15 +113,11 @@ def _bbox_rtree_ddl(table: str, cols: tuple[str, str, str, str]) -> list[str]:
     return [
         f"CREATE VIRTUAL TABLE IF NOT EXISTS {rtree} "
         f"USING rtree(id, min_lon, max_lon, min_lat, max_lat)",
-        f"""CREATE TRIGGER IF NOT EXISTS {table}_rtree_ai AFTER INSERT ON {table} BEGIN
-              INSERT OR REPLACE INTO {rtree}(id, min_lon, max_lon, min_lat, max_lat)
-              VALUES ({values});
-            END""",
-        f"""CREATE TRIGGER IF NOT EXISTS {table}_rtree_au AFTER UPDATE ON {table} BEGIN
-              INSERT OR REPLACE INTO {rtree}(id, min_lon, max_lon, min_lat, max_lat)
-              VALUES ({values});
-            END""",
-        f"""CREATE TRIGGER IF NOT EXISTS {table}_rtree_ad AFTER DELETE ON {table} BEGIN
+        f"""CREATE TRIGGER {table}_rtree_ai AFTER INSERT ON {table}
+            BEGIN {_sync_body(rtree, values)} END""",
+        f"""CREATE TRIGGER {table}_rtree_au AFTER UPDATE ON {table}
+            BEGIN {_sync_body(rtree, values)} END""",
+        f"""CREATE TRIGGER {table}_rtree_ad AFTER DELETE ON {table} BEGIN
               DELETE FROM {rtree} WHERE id = OLD.id;
             END""",
     ]
@@ -121,6 +128,11 @@ def create_rtree_tables(engine: Engine) -> None:
     if engine.dialect.name != "sqlite":
         return
     statements: list[str] = []
+    # Drop first so an existing database picks up corrected trigger bodies.
+    # CREATE TRIGGER IF NOT EXISTS would silently keep a stale definition.
+    for table in list(_POINT_TABLES) + list(_BBOX_TABLES):
+        for suffix in ("ai", "au", "ad"):
+            statements.append(f"DROP TRIGGER IF EXISTS {table}_rtree_{suffix}")
     for table, (lon_col, lat_col) in _POINT_TABLES.items():
         statements.extend(_point_rtree_ddl(table, lon_col, lat_col))
     for table, cols in _BBOX_TABLES.items():

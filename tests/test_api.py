@@ -185,3 +185,85 @@ def test_websocket_reports_a_bad_bbox_instead_of_crashing(client):
         payload = ws.receive_json()
 
     assert "error" in payload
+
+
+# --------------------------------------------------------------------------
+# SAR coverage
+# --------------------------------------------------------------------------
+
+
+def _seed_scene(factory, product_id="s1", lon0=56.0, lat0=26.0, hours_ago=3):
+    from core.db.repository import SceneRepository
+
+    class FakeProduct:
+        pass
+
+    product = FakeProduct()
+    product.product_id = product_id
+    product.name = f"S1D_IW_GRDH_1SDV_{product_id}_COG.SAFE"
+    product.satellite = "S1D"
+    product.mode = "IW"
+    product.polarisation = "DV"
+    product.acq_start = dt.datetime.now(dt.UTC) - dt.timedelta(hours=hours_ago)
+    product.orbit_direction = "DESCENDING"
+    product.footprint = [
+        (lon0, lat0),
+        (lon0 + 1, lat0),
+        (lon0 + 1, lat0 + 1),
+        (lon0, lat0 + 1),
+        (lon0, lat0),
+    ]
+    product.s3_path = "/eodata/x"
+    bbox_holder = type(
+        "B", (), {"min_lon": lon0, "min_lat": lat0, "max_lon": lon0 + 1, "max_lat": lat0 + 1}
+    )
+    product.bbox = bbox_holder
+
+    with session_scope(factory) as session:
+        SceneRepository(session).upsert(product)
+
+
+def test_scenes_endpoint_returns_footprints(client):
+    factory = api._state["sessions"]
+    _seed_scene(factory)
+
+    body = client.get("/api/scenes").json()
+
+    assert body["count"] == 1
+    scene = body["scenes"][0]
+    assert scene["satellite"] == "S1D"
+    assert len(scene["footprint"]) == 5  # closed ring, drawable
+    assert scene["polarisation"] == "DV"
+
+
+def test_scenes_carry_their_age_for_the_coverage_overlay(client):
+    _seed_scene(api._state["sessions"], hours_ago=5)
+
+    scene = client.get("/api/scenes").json()["scenes"][0]
+
+    # Where this is large, the platform is blind and must say so.
+    assert 4.5 < scene["age_hours"] < 5.5
+
+
+def test_scenes_report_the_last_radar_look(client):
+    _seed_scene(api._state["sessions"])
+
+    body = client.get("/api/scenes").json()
+
+    assert body["last_look"] is not None
+    assert body["attribution"].startswith("Contains modified Copernicus")
+
+
+def test_scenes_outside_the_bbox_are_excluded(client):
+    _seed_scene(api._state["sessions"], lon0=56.0, lat0=26.0)
+
+    body = client.get("/api/scenes", params={"bbox": "0,50,5,55"}).json()
+
+    assert body["count"] == 0
+    assert body["last_look"] is None
+
+
+def test_health_reports_known_scene_count(client):
+    _seed_scene(api._state["sessions"])
+
+    assert client.get("/api/health").json()["sar_scenes"] == 1

@@ -188,3 +188,77 @@ def test_foreign_keys_are_enforced(session_factory):
 
     with pytest.raises(IntegrityError), session_scope(session_factory) as session:
         _add_position(session, mmsi=999999999, lon=56.5, lat=26.5)
+
+
+def test_upsert_refreshes_the_spatial_index_without_conflict(session_factory):
+    """Regression: an upsert used to raise UNIQUE on the R*Tree.
+
+    SQLite fires the AFTER INSERT trigger even when the statement takes the
+    DO UPDATE path, and an R*Tree is a virtual table that does NOT honour
+    INSERT OR REPLACE - it raises instead of overwriting. Phase 1 never hit
+    this because AIS positions upsert with DO NOTHING, which fires no trigger.
+    """
+    import datetime as dt
+
+    from sqlalchemy import text
+
+    from core.db.repository import SceneRepository
+
+    class FakeProduct:
+        product_id = "fixed-id"
+        name = "S1D_IW_GRDH_1SDV_20260910T020615_x_COG.SAFE"
+        satellite = "S1D"
+        mode = "IW"
+        polarisation = "DV"
+        acq_start = dt.datetime(2026, 9, 10, 2, 6, tzinfo=dt.UTC)
+        orbit_direction = "DESCENDING"
+        footprint = ((56.0, 26.0), (57.0, 26.0), (57.0, 27.0), (56.0, 27.0), (56.0, 26.0))
+        s3_path = "/eodata/x"
+
+        class bbox:  # noqa: N801 - stand-in for the real BBox
+            min_lon, min_lat, max_lon, max_lat = 56.0, 26.0, 57.0, 27.0
+
+    product = FakeProduct()
+
+    with session_scope(session_factory) as session:
+        assert SceneRepository(session).upsert(product) is True
+
+    # The same product discovered again must update, not explode.
+    with session_scope(session_factory) as session:
+        assert SceneRepository(session).upsert(product) is False
+
+    with session_scope(session_factory) as session:
+        assert SceneRepository(session).count() == 1
+        # Exactly one spatial index entry, not zero and not two.
+        rows = session.execute(text("SELECT count(*) FROM sar_scenes_rtree")).scalar()
+        assert rows == 1
+
+
+def test_scene_repository_finds_scenes_over_an_aoi(session_factory):
+    import datetime as dt
+
+    from core.db.repository import SceneRepository
+
+    class FakeProduct:
+        product_id = "over-hormuz"
+        name = "S1C_IW_GRDH_1SDV_x_COG.SAFE"
+        satellite = "S1C"
+        mode = "IW"
+        polarisation = "DV"
+        acq_start = dt.datetime(2026, 9, 10, 2, 6, tzinfo=dt.UTC)
+        orbit_direction = "ASCENDING"
+        footprint = ((56.0, 26.0), (57.0, 26.0), (57.0, 27.0), (56.0, 27.0), (56.0, 26.0))
+        s3_path = "/eodata/y"
+
+        class bbox:  # noqa: N801
+            min_lon, min_lat, max_lon, max_lat = 56.0, 26.0, 57.0, 27.0
+
+    with session_scope(session_factory) as session:
+        SceneRepository(session).upsert(FakeProduct())
+
+    with session_scope(session_factory) as session:
+        scenes = SceneRepository(session)
+        assert len(scenes.intersecting(HORMUZ_BBOX)) == 1
+        # The North Sea is not covered by a Gulf scene.
+        assert scenes.intersecting(BBox(0.0, 50.0, 5.0, 55.0)) == []
+        assert scenes.latest_acquisition(HORMUZ_BBOX) is not None

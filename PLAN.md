@@ -1174,3 +1174,44 @@ breaks every anomaly query.
 **Policy confirmed in code:** implausible positions are flagged and kept, never
 dropped. A fabricated track identifies a vessel actively concealing movement,
 so discarding it would destroy the signal the product exists to find.
+
+### 2026-09-10 — Phase 2
+
+**No Docker needed after all.** rasterio 1.5.1 / GDAL 3.12.4 install from
+Windows wheels, which retires the plan's "SAR preprocessing is a Windows
+install nightmare" risk entirely. Combined with the CDSE `-COG` product, the
+whole SNAP/orthorectification chain is gone.
+
+**Confirmed against live CDSE:** the `-COG` variant is real and is 1,131 MB
+against 1,729 MB for the SAFE archive. `S3Path` gives the byte-range target,
+`GeoFootprint` is GeoJSON, and `Online` distinguishes readable products from
+ones parked in long-term archive.
+
+**Two real bugs found by measurement:**
+
+1. **The catalogue search was silently truncating.** CDSE caps a page and hands
+   back an `@odata.nextLink`, which was ignored: 234 products existed, 200 came
+   back, no error. For a discovery worker that means missing scenes and a
+   coverage picture that is quietly wrong. Now paginated.
+2. **The R\*Tree triggers broke on upsert.** SQLite fires the AFTER INSERT
+   trigger even when a statement takes the `DO UPDATE` path, and an R\*Tree is a
+   virtual table that does NOT honour `INSERT OR REPLACE` - it raises UNIQUE
+   instead of overwriting. Phase 1 never hit this because AIS positions upsert
+   with `DO NOTHING`, which fires no trigger. Triggers now delete-then-insert,
+   and the DDL drops stale triggers first so existing databases self-heal.
+
+**Sigmoid normalisation recalibrated.** The first parameters put open ocean at
+0.39, spending contrast on empty water - the exact thing the sigmoid exists to
+avoid. Re-solved so sea (~80 DN) maps to 0.10 and a ship return (~1200 DN) to
+0.90. These values are now FROZEN: normalisation is a silent train/serve skew
+source.
+
+**Naming corrected:** a whole-AOI search reports the gap between passes
+*anywhere* over the area (~0.5 d), which is not the revisit interval of a
+single point (~2-3 d). The report says so explicitly.
+
+**Status: partially complete.** Everything that does not need credentials is
+done and verified against live data - 117 real Sentinel-1 scenes discovered and
+rendered as a coverage overlay. Reading actual pixels needs CDSE credentials;
+the read path is written and tested against a real COG on disk, but has not
+been exercised against `/vsis3/`.
