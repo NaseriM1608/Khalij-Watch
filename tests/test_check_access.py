@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "scripts"))
 
-from check_access import Result, mean_revisit_days  # noqa: E402
+from check_access import Result, mean_revisit_days
 
 
 def _product(stamp: str) -> dict:

@@ -607,7 +607,7 @@ claiming tanker-vs-cargo from these pixels is overfitting noise.
   This is a stated limitation, not a bug to fix.
 - Very high vessel density in anchorages (Bandar Abbas, Fujairah) → greedy nearest-neighbour
   matching WILL fail. Use global assignment.
-- AOI (full platform): lon 47.5–57.0, lat 23.5–30.5
+- AOI (full platform): lon 47.5–58.0, lat 23.5–30.5
 - AOI (DL training/eval): Strait of Hormuz — lon 54.0–57.5, lat 24.5–27.5
 
 ---
@@ -1100,3 +1100,45 @@ stabilised in July 2026.
 - GFW's exact SAR 4Wings dataset identifier; query `/v3/datasets` once you have a token.
 - Whether Skylight (Ai2) will grant API access to a non-governmental academic project.
   Free, high-value, and unknown — worth an email early.
+
+
+---
+
+## 17. Decisions log (updated during implementation)
+
+Deviations from the plan as written, with the reason. Anything here supersedes
+the corresponding text above.
+
+### 2026-09-10 — Phase 0
+
+**Docker is not installed; database deferred to SQLite.**
+The plan assumed `docker compose up` with PostGIS + TimescaleDB. Docker is not
+present, C: had only 4.1 GB free, and the host has 10 GB RAM, so Docker Desktop
+was a poor fit. The user chose to defer and use SQLite for now.
+
+Accepted cost: spatial queries and time-series work will need revisiting on the
+move to PostGIS. Mitigations applied to keep that contained:
+- Geometry stored as plain `lon`/`lat` REAL columns, not a vendor geometry type.
+- SQLite **R\*Tree** companion tables give a genuine spatial index, kept in sync
+  by triggers so the index cannot drift. These become GiST indexes on PostGIS.
+- All dialect-specific code confined to `core/db/session.py` and
+  `core/db/spatial.py`; callers use `bbox_filter_sql()`.
+- WAL journal, `synchronous=NORMAL`, `foreign_keys=ON`, 64 MB page cache — the
+  cache deliberately modest given 10 GB total RAM.
+
+Also worth noting: **TimescaleDB was over-specified.** At Gulf volumes (~3–8k
+active vessels) plain partitioning plus BRIN/btree indexes is sufficient, so
+nothing of substance is lost by not having it.
+
+**Gulf AOI eastern edge corrected: 57.0 → 58.0 °E.**
+Caught by a test asserting the Hormuz training AOI sits inside the platform AOI
+— it did not. The Strait of Hormuz is near 56–57 °E and transits must be
+observable on *both* sides, so the AOI has to reach into the Gulf of Oman
+approaches. 57.0 was simply wrong.
+
+**No SNAP, no preprocessing chain** (confirmed, per the CDSE `-COG` finding).
+
+**Sentinel-1 coverage independently verified** against the live catalogue on
+2026-09-10, matching the research: Hormuz 28 acquisitions/30 d (**2.0 d mean
+revisit**), Central Gulf 20 (2.8 d), N Gulf 20 (3.2 d); constellation S1C+S1D
+only; every acquisition `IW_GRDH_1S` dual-pol VV+VH.

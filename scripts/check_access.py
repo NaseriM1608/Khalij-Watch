@@ -9,6 +9,7 @@ Run:  uv run --python 3.12 python scripts/check_access.py
 from __future__ import annotations
 
 import datetime as dt
+import itertools
 import json
 import os
 import time
@@ -28,8 +29,7 @@ RETRIES = 3
 RETRY_BACKOFF_S = 2
 CDSE_ODATA = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
 CDSE_TOKEN = (
-    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE"
-    "/protocol/openid-connect/token"
+    "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 )
 
 # Persian Gulf sample points (lon, lat)
@@ -93,15 +93,13 @@ def _http_status(url: str, method: str = "GET") -> int:
             return resp.status
     except urllib.error.HTTPError as exc:
         return exc.code
-    except Exception:  # noqa: BLE001 - unreachable is a result, not a crash
+    except Exception:
         return 0
 
 
 def query_sentinel1(lon: float, lat: float, days: int = 30) -> list[dict]:
     """Search CDSE for Sentinel-1 IW GRDH products over a point. No auth needed."""
-    since = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).strftime(
-        "%Y-%m-%dT%H:%M:%S.000Z"
-    )
+    since = (dt.datetime.now(dt.UTC) - dt.timedelta(days=days)).strftime("%Y-%m-%dT%H:%M:%S.000Z")
     odata_filter = (
         "Collection/Name eq 'SENTINEL-1' and "
         f"OData.CSC.Intersects(area=geography'SRID=4326;POINT({lon} {lat})') and "
@@ -120,13 +118,12 @@ def query_sentinel1(lon: float, lat: float, days: int = 30) -> list[dict]:
 def mean_revisit_days(products: list[dict]) -> float:
     """Mean gap between distinct acquisitions, in days."""
     stamps = sorted(
-        dt.datetime.strptime(p["ContentDate"]["Start"][:19], "%Y-%m-%dT%H:%M:%S")
-        for p in products
+        dt.datetime.strptime(p["ContentDate"]["Start"][:19], "%Y-%m-%dT%H:%M:%S") for p in products
     )
     # Products from one pass share a timestamp within minutes; collapse them.
     gaps = [
         (b - a).total_seconds() / 86400
-        for a, b in zip(stamps, stamps[1:])
+        for a, b in itertools.pairwise(stamps)
         if (b - a).total_seconds() > 3600
     ]
     return sum(gaps) / len(gaps) if gaps else 0.0
@@ -147,7 +144,7 @@ def check_cdse_catalogue() -> Result:
                 f"revisit={revisit:.1f}d  sats={','.join(sats) or '-'}  "
                 f"pol={','.join(pols) or '-'}"
             )
-    except Exception as exc:  # noqa: BLE001 - report any failure to the operator
+    except Exception as exc:
         return Result("CDSE catalogue (Sentinel-1)", False, f"{type(exc).__name__}: {exc}")
 
     ok = total >= MIN_ACQUISITIONS_30D
@@ -179,7 +176,7 @@ def check_cdse_credentials() -> Result:
         with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
             token = json.load(resp).get("access_token", "")
         return Result("CDSE credentials", bool(token), f"token acquired ({len(token)} chars)")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         return Result("CDSE credentials", False, f"{type(exc).__name__}: {exc}")
 
 
@@ -187,7 +184,11 @@ def check_aisstream() -> Result:
     key = os.environ.get("AISSTREAM_API_KEY")
     status = _http_status("https://aisstream.io/")
     if status != 200:
-        return Result("aisstream.io", False, f"site unreachable ({'DNS/network failure' if status == 0 else f'HTTP {status}'})")
+        return Result(
+            "aisstream.io",
+            False,
+            f"site unreachable ({'DNS/network failure' if status == 0 else f'HTTP {status}'})",
+        )
     if not key:
         return Result(
             "aisstream.io",

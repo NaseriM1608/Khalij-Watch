@@ -90,7 +90,7 @@ claiming tanker-vs-cargo from these pixels is overfitting noise.
   This is a stated limitation, not a bug to fix.
 - Very high vessel density in anchorages (Bandar Abbas, Fujairah) → greedy nearest-neighbour
   matching WILL fail. Use global assignment.
-- AOI (full platform): lon 47.5–57.0, lat 23.5–30.5
+- AOI (full platform): lon 47.5–58.0, lat 23.5–30.5
 - AOI (DL training/eval): Strait of Hormuz — lon 54.0–57.5, lat 24.5–27.5
 
 ---
