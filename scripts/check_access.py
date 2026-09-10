@@ -12,11 +12,30 @@ import datetime as dt
 import itertools
 import json
 import os
+import sys
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
+from pathlib import Path
+
+
+def _load_dotenv(path: Path = Path(".env")) -> None:
+    """Load .env before any check reads the environment.
+
+    Without this the script reports credentials as missing when they are
+    sitting in the file, which is a needlessly confusing failure.
+    """
+    if not path.is_file():
+        return
+    for line in path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            continue
+        key, _, value = stripped.partition("=")
+        os.environ.setdefault(key.strip(), value.strip())
+
 
 TIMEOUT = 60
 # Some hosts (aisstream.io) sit behind Cloudflare and 403 the default
@@ -153,31 +172,106 @@ def check_cdse_catalogue() -> Result:
 
 
 def check_cdse_credentials() -> Result:
-    """Confirm a token can be obtained, if credentials are configured."""
-    user = os.environ.get("CDSE_USERNAME")
-    password = os.environ.get("CDSE_PASSWORD")
-    if not user or not password:
+    """Confirm a token can actually be obtained.
+
+    Delegates to TokenManager so this checks the SAME code path the ingest
+    uses, rather than a second implementation that could drift from it.
+    """
+    from core.sar.auth import AuthError, TokenManager
+
+    manager = TokenManager()
+    if not manager.is_configured:
         return Result(
             "CDSE credentials",
             False,
-            "CDSE_USERNAME / CDSE_PASSWORD not set - register at "
-            "https://dataspace.copernicus.eu (free) and add them to .env",
+            "not set - create an OAuth client at https://dataspace.copernicus.eu "
+            "and put its id and secret in CDSE_CLIENT_ID / CDSE_CLIENT_SECRET",
         )
-    body = urllib.parse.urlencode(
-        {
-            "client_id": "cdse-public",
-            "username": user,
-            "password": password,
-            "grant_type": "password",
-        }
-    ).encode()
     try:
-        req = urllib.request.Request(CDSE_TOKEN, data=body, method="POST")
-        with urllib.request.urlopen(req, timeout=TIMEOUT) as resp:
-            token = json.load(resp).get("access_token", "")
-        return Result("CDSE credentials", bool(token), f"token acquired ({len(token)} chars)")
+        token = manager.token()
+    except AuthError as exc:
+        return Result(
+            "CDSE credentials",
+            False,
+            str(exc),
+            [f"attempted the {manager.grant_type} grant"],
+        )
+    return Result(
+        "CDSE credentials",
+        bool(token),
+        f"token acquired via {manager.grant_type} grant ({len(token)} chars)",
+    )
+
+
+def check_cdse_download() -> Result:
+    """Confirm the token can actually READ PIXELS, not merely authenticate.
+
+    These are separate entitlements at CDSE, and conflating them hides a real
+    failure: a Sentinel Hub OAuth client authenticates happily and is then
+    refused by the download service with "Token audience not allowed". A check
+    that stops at token acquisition reports PASS while nothing can be read.
+    """
+    import urllib.error
+
+    from core.sar.auth import AuthError, S3Credentials, TokenManager
+
+    if S3Credentials.from_env() is not None:
+        return Result(
+            "CDSE pixel access",
+            True,
+            "S3 credentials present (the byte-range path used for windowed reads)",
+        )
+
+    manager = TokenManager()
+    if not manager.is_configured:
+        return Result("CDSE pixel access", False, "no credentials configured")
+
+    try:
+        token = manager.token()
+    except AuthError as exc:
+        return Result("CDSE pixel access", False, str(exc))
+
+    # Probe a REAL product with a 100-byte range: the smallest request that
+    # genuinely exercises the download entitlement. Uses this script's own
+    # stdlib catalogue query, so the checker stays dependency-free and can be
+    # run before the project is installed.
+    lon, lat = GULF_POINTS["Hormuz"]
+    try:
+        products = query_sentinel1(lon, lat, days=20)
     except Exception as exc:
-        return Result("CDSE credentials", False, f"{type(exc).__name__}: {exc}")
+        return Result("CDSE pixel access", False, f"catalogue lookup failed: {exc}")
+    if not products:
+        return Result("CDSE pixel access", False, "no product available to probe")
+
+    probe = urllib.request.Request(
+        f"https://download.dataspace.copernicus.eu/odata/v1/Products({products[0]['Id']})/$value",
+        headers={
+            "Authorization": f"Bearer {token}",
+            "User-Agent": USER_AGENT,
+            "Range": "bytes=0-99",
+        },
+    )
+    try:
+        _open(probe)
+    except urllib.error.HTTPError as exc:
+        if exc.code in (401, 403):
+            return Result(
+                "CDSE pixel access",
+                False,
+                f"authenticated, but the download service refused the token (HTTP {exc.code})",
+                [
+                    "A Sentinel Hub OAuth client (id starting 'sh-') can query the",
+                    "catalogue but NOT download product data.",
+                    "FIX: in the CDSE dashboard generate S3 credentials, then set",
+                    "     CDSE_S3_ACCESS_KEY / CDSE_S3_SECRET_KEY in .env.",
+                    "That is also the only path that supports windowed byte-range",
+                    "reads, which this project depends on.",
+                ],
+            )
+        return Result("CDSE pixel access", False, f"HTTP {exc.code}")
+    except Exception as exc:
+        return Result("CDSE pixel access", False, f"{type(exc).__name__}: {exc}")
+    return Result("CDSE pixel access", True, "download service accepted the token")
 
 
 def check_aisstream() -> Result:
@@ -225,6 +319,8 @@ def check_xview3() -> Result:
 
 
 def main() -> int:
+    _load_dotenv()
+    sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     print("=" * 74)
     print("PHASE 0 ACCESS CHECKS - khalij-watch")
     print(f"UTC: {dt.datetime.now(dt.UTC):%Y-%m-%d %H:%M:%S}")
@@ -233,6 +329,7 @@ def main() -> int:
     results = [
         check_cdse_catalogue(),
         check_cdse_credentials(),
+        check_cdse_download(),
         check_aisstream(),
         check_xview3(),
     ]

@@ -31,6 +31,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from core.db.spatial import BBox
+from core.net import USER_AGENT, open_with_retry
 
 ODATA_URL = "https://catalogue.dataspace.copernicus.eu/odata/v1/Products"
 SENTINEL1 = "SENTINEL-1"
@@ -47,12 +48,6 @@ DEFAULT_PAGE_SIZE = 1000
 # link truncates results SILENTLY, which for a discovery worker means missing
 # scenes and reporting a coverage picture that is quietly wrong.
 MAX_PAGES = 20
-# The catalogue is public, but a default Python user-agent is sometimes
-# refused by the fronting CDN.
-USER_AGENT = (
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
-    "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-)
 
 
 class CatalogueError(RuntimeError):
@@ -203,7 +198,7 @@ def _fetch(url: str, opener=None) -> dict[str, Any]:
         url, headers={"Accept": "application/json", "User-Agent": USER_AGENT}
     )
     try:
-        with (opener or urllib.request.urlopen)(request, timeout=DEFAULT_TIMEOUT) as response:
+        with open_with_retry(request, timeout=DEFAULT_TIMEOUT, opener=opener) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
         raise CatalogueError(f"catalogue returned HTTP {exc.code}") from exc

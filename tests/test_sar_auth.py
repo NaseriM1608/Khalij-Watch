@@ -18,9 +18,26 @@ from core.sar.auth import (
     S3Credentials,
     Token,
     TokenManager,
+    looks_like_oauth_client,
 )
 
 NOW = dt.datetime(2026, 9, 10, 12, 0, tzinfo=dt.UTC)
+# An account login is an email; an OAuth client id is opaque. The grant is
+# chosen from that difference, so the tests must use realistic values.
+ACCOUNT = "analyst@example.com"
+CLIENT_ID = "sh-2f1c9a44-0e17-4b5b-9d3e-77c2a1b45e90"
+
+
+@pytest.fixture(autouse=True)
+def _isolate_env(monkeypatch):
+    """Never let the developer's real credentials leak into these tests."""
+    for name in (
+        "CDSE_CLIENT_ID",
+        "CDSE_CLIENT_SECRET",
+        "CDSE_USERNAME",
+        "CDSE_PASSWORD",
+    ):
+        monkeypatch.delenv(name, raising=False)
 
 
 def fake_identity(*responses):
@@ -62,17 +79,59 @@ def test_token_expires_early_by_the_safety_margin():
     assert not token.is_valid(NOW)
 
 
-def test_login_returns_an_access_token():
+def test_an_email_selects_the_password_grant():
     opener = fake_identity({"access_token": "AT", "refresh_token": "RT", "expires_in": 600})
-    manager = TokenManager("user", "pass", opener=opener)
+    manager = TokenManager(ACCOUNT, "pass", opener=opener)
 
+    assert manager.grant_type == "password"
     assert manager.token(now=NOW) == "AT"
     assert opener.calls[0]["grant_type"] == ["password"]
 
 
+def test_an_opaque_id_selects_the_client_credentials_grant():
+    """An OAuth client from the CDSE dashboard, not an account login."""
+    opener = fake_identity({"access_token": "AT", "expires_in": 600})
+    manager = TokenManager(CLIENT_ID, "secret", opener=opener)
+
+    assert manager.grant_type == "client_credentials"
+    assert manager.token(now=NOW) == "AT"
+    assert opener.calls[0]["grant_type"] == ["client_credentials"]
+    assert opener.calls[0]["client_id"] == [CLIENT_ID]
+
+
+def test_client_credentials_reauthenticates_instead_of_refreshing():
+    """That grant issues no refresh token, so a fresh login is correct."""
+    opener = fake_identity(
+        {"access_token": "AT1", "expires_in": 600},
+        {"access_token": "AT2", "expires_in": 600},
+    )
+    manager = TokenManager(CLIENT_ID, "secret", opener=opener)
+
+    manager.token(now=NOW)
+    second = manager.token(now=NOW + dt.timedelta(minutes=11))
+
+    assert second == "AT2"
+    assert opener.calls[1]["grant_type"] == ["client_credentials"]
+
+
+def test_explicit_client_variables_win_over_the_generic_pair(monkeypatch):
+    monkeypatch.setenv("CDSE_CLIENT_ID", CLIENT_ID)
+    monkeypatch.setenv("CDSE_CLIENT_SECRET", "secret")
+    monkeypatch.setenv("CDSE_USERNAME", ACCOUNT)
+    monkeypatch.setenv("CDSE_PASSWORD", "pw")
+
+    assert TokenManager().grant_type == "client_credentials"
+
+
+def test_oauth_client_detection():
+    assert looks_like_oauth_client(CLIENT_ID)
+    assert not looks_like_oauth_client(ACCOUNT)
+    assert not looks_like_oauth_client(None)
+
+
 def test_a_valid_token_is_reused_not_refetched():
     opener = fake_identity({"access_token": "AT", "expires_in": 600})
-    manager = TokenManager("user", "pass", opener=opener)
+    manager = TokenManager(ACCOUNT, "pass", opener=opener)
 
     manager.token(now=NOW)
     manager.token(now=NOW + dt.timedelta(seconds=30))
@@ -85,7 +144,7 @@ def test_an_expired_token_is_refreshed():
         {"access_token": "AT1", "refresh_token": "RT", "expires_in": 600},
         {"access_token": "AT2", "refresh_token": "RT2", "expires_in": 600},
     )
-    manager = TokenManager("user", "pass", opener=opener)
+    manager = TokenManager(ACCOUNT, "pass", opener=opener)
 
     manager.token(now=NOW)
     second = manager.token(now=NOW + dt.timedelta(minutes=11))
@@ -103,7 +162,7 @@ def test_a_dead_refresh_token_falls_back_to_full_login():
         urllib.error.HTTPError("u", 400, "bad", {}, None),
         {"access_token": "AT3", "expires_in": 600},
     )
-    manager = TokenManager("user", "pass", opener=opener)
+    manager = TokenManager(ACCOUNT, "pass", opener=opener)
 
     manager.token(now=NOW)
     third = manager.token(now=NOW + dt.timedelta(minutes=11))
@@ -115,20 +174,20 @@ def test_a_dead_refresh_token_falls_back_to_full_login():
 def test_missing_credentials_give_an_actionable_error():
     manager = TokenManager(None, None)
 
-    with pytest.raises(AuthError, match=r"dataspace\.copernicus\.eu"):
+    with pytest.raises(AuthError, match="CDSE_CLIENT_ID"):
         manager.token(now=NOW)
 
 
 def test_is_configured_reflects_credentials():
     assert not TokenManager(None, None).is_configured
-    assert TokenManager("u", "p").is_configured
+    assert TokenManager(ACCOUNT, "p").is_configured
 
 
 def test_bad_credentials_are_reported_clearly():
     import urllib.error
 
     opener = fake_identity(urllib.error.HTTPError("u", 401, "no", {}, None))
-    manager = TokenManager("user", "wrong", opener=opener)
+    manager = TokenManager(ACCOUNT, "wrong", opener=opener)
 
     with pytest.raises(AuthError, match="invalid credentials"):
         manager.token(now=NOW)
@@ -138,7 +197,7 @@ def test_response_without_a_token_is_rejected():
     opener = fake_identity({"error": "nope"})
 
     with pytest.raises(AuthError, match="no access_token"):
-        TokenManager("u", "p", opener=opener).token(now=NOW)
+        TokenManager(ACCOUNT, "p", opener=opener).token(now=NOW)
 
 
 # --------------------------------------------------------------------------

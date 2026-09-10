@@ -23,6 +23,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass
 
+from core.net import open_with_retry
+
 TOKEN_URL = (
     "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
 )
@@ -59,7 +61,7 @@ def _post(payload: dict[str, str], opener=None) -> dict:
         headers={"Content-Type": "application/x-www-form-urlencoded"},
     )
     try:
-        with (opener or urllib.request.urlopen)(request, timeout=DEFAULT_TIMEOUT) as response:
+        with open_with_retry(request, timeout=DEFAULT_TIMEOUT, opener=opener) as response:
             return json.load(response)
     except urllib.error.HTTPError as exc:
         detail = "invalid credentials" if exc.code in (400, 401) else f"HTTP {exc.code}"
@@ -82,8 +84,31 @@ def _to_token(payload: dict, now: dt.datetime) -> Token:
     )
 
 
+def looks_like_oauth_client(identifier: str | None) -> bool:
+    """Distinguish an OAuth client id from an account username.
+
+    CDSE supports two machine flows. An account login is an email address; an
+    OAuth client created in the dashboard is an opaque id with a separate
+    secret and uses a different grant entirely. Guessing wrong produces a bare
+    "invalid credentials", which is a miserable thing to debug, so the shape of
+    the identifier is used to pick the right grant automatically.
+    """
+    return bool(identifier) and "@" not in (identifier or "")
+
+
 class TokenManager:
-    """Fetches and refreshes a CDSE access token on demand."""
+    """Fetches and refreshes a CDSE access token on demand.
+
+    Supports both CDSE machine flows:
+
+    * ``password`` - an account email plus password.
+    * ``client_credentials`` - an OAuth client id plus secret, created in the
+      CDSE dashboard. This is the better choice for a service: it is revocable
+      on its own and carries no account password.
+
+    Set either ``CDSE_CLIENT_ID``/``CDSE_CLIENT_SECRET`` or
+    ``CDSE_USERNAME``/``CDSE_PASSWORD``; the grant is chosen automatically.
+    """
 
     def __init__(
         self,
@@ -92,14 +117,22 @@ class TokenManager:
         *,
         opener=None,
     ) -> None:
-        self._username = username or os.environ.get("CDSE_USERNAME")
-        self._password = password or os.environ.get("CDSE_PASSWORD")
+        # Explicit client variables win; otherwise fall back to the generic
+        # pair, which may hold either kind of credential.
+        client_id = os.environ.get("CDSE_CLIENT_ID")
+        client_secret = os.environ.get("CDSE_CLIENT_SECRET")
+        self._username = username or client_id or os.environ.get("CDSE_USERNAME")
+        self._password = password or client_secret or os.environ.get("CDSE_PASSWORD")
         self._opener = opener
         self._token: Token | None = None
 
     @property
     def is_configured(self) -> bool:
         return bool(self._username and self._password)
+
+    @property
+    def grant_type(self) -> str:
+        return "client_credentials" if looks_like_oauth_client(self._username) else "password"
 
     def token(self, *, now: dt.datetime | None = None) -> str:
         """Return a valid access token, refreshing or re-authenticating."""
@@ -120,23 +153,31 @@ class TokenManager:
     def _login(self, now: dt.datetime) -> Token:
         if not self.is_configured:
             raise AuthError(
-                "CDSE_USERNAME / CDSE_PASSWORD are not set. Register free at "
-                "https://dataspace.copernicus.eu and add them to .env"
+                "No CDSE credentials. Set CDSE_CLIENT_ID / CDSE_CLIENT_SECRET "
+                "(an OAuth client from the CDSE dashboard) or "
+                "CDSE_USERNAME / CDSE_PASSWORD (an account login). Register "
+                "free at https://dataspace.copernicus.eu"
             )
-        return _to_token(
-            _post(
-                {
-                    "client_id": PUBLIC_CLIENT_ID,
-                    "username": self._username or "",
-                    "password": self._password or "",
-                    "grant_type": "password",
-                },
-                self._opener,
-            ),
-            now,
-        )
+        if self.grant_type == "client_credentials":
+            payload = {
+                "client_id": self._username or "",
+                "client_secret": self._password or "",
+                "grant_type": "client_credentials",
+            }
+        else:
+            payload = {
+                "client_id": PUBLIC_CLIENT_ID,
+                "username": self._username or "",
+                "password": self._password or "",
+                "grant_type": "password",
+            }
+        return _to_token(_post(payload, self._opener), now)
 
     def _refresh(self, refresh_token: str, now: dt.datetime) -> Token:
+        # A client_credentials token carries no refresh token; re-authenticating
+        # is both cheap and correct there.
+        if self.grant_type == "client_credentials":
+            return self._login(now)
         return _to_token(
             _post(
                 {
