@@ -1215,3 +1215,49 @@ done and verified against live data - 117 real Sentinel-1 scenes discovered and
 rendered as a coverage overlay. Reading actual pixels needs CDSE credentials;
 the read path is written and tested against a real COG on disk, but has not
 been exercised against `/vsis3/`.
+
+### 2026-09-11 — Phase 3
+
+**CFAR detector built and calibrated on synthetic SAR.** Requested Pfa 1e-3
+measures 9.95e-4; 1e-5 measures 1.04e-5. Throughput 14.9 Mpx/s, so a full
+25000x17000 IW scene takes ~28 s single-threaded on this laptop.
+
+Two modelling errors, both found by measurement rather than reasoning:
+
+1. **The textbook CFAR threshold assumes single-look clutter.**
+   `alpha = -ln(Pfa)` is derived for exponential (L=1) intensity. Sentinel-1
+   IW GRDH is ~4.4 looks, whose Gamma-distributed intensity is far less
+   heavy-tailed, so that formula sets the threshold **2.7x too high** (13.82
+   against 5.05 at Pfa=1e-6). The detector would have run far more
+   conservatively than its dial claimed, missing vessels while appearing
+   correctly configured. Now solved from the Gamma model, verified to reduce
+   to `-ln(Pfa)` exactly at L=1.
+2. **The guard band must exceed a vessel's LENGTH, not its beam.** With a
+   130 m guard, a 300 m tanker put its own pixels in its own training ring:
+   19 of 341 target pixels detected, length estimated at 79 m. With a 490 m
+   guard: 337 pixels, 310 m. This fails as fragments rather than a miss,
+   which is why it is easy to overlook.
+
+**Morphological opening does most of the false-alarm work**, not the geometry
+filter as assumed. At a loose Pfa, ~7,900 scattered clutter hits reduce to
+zero after erosion, because speckle spikes are isolated. Geometry is the third
+line of defence, and Pfa has to be pushed to 2e-1 before it has anything left
+to reject.
+
+**Offshore infrastructure mask fetched and integrated.** OPD v1.0.0
+(doi:10.5281/zenodo.19046824, **CC BY 4.0**) gives 2,314 Persian Gulf
+platforms with per-structure lifespans. Measured against real scene
+footprints already in the database: **up to 870 platforms fall inside a single
+Sentinel-1 scene** over the Saudi/Qatari shelf, median 30 across 60 recent
+scenes. Unmasked, every one would be reported as a stationary vessel on every
+pass.
+
+The mask is **time-aware**, which is a correctness property rather than a
+nicety: a platform first seen in 2023Q4 must not mask a 2019 scene, or it
+hides a real vessel. Each entry is applied only to imagery inside its lifespan.
+
+**Credential finding:** a Sentinel Hub OAuth client (id starting `sh-`)
+authenticates and queries the catalogue, but the download service refuses it
+with `DAT-ZIP-609: Token audience not allowed`. Reading pixels needs **S3
+credentials**, generated separately in the CDSE dashboard - and that is also
+the only path supporting byte-range windowed reads.

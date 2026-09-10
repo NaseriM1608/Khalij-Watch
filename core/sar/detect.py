@@ -228,11 +228,13 @@ def georeference(
     ``window_offset`` is the (row, col) origin of the window within the scene,
     so candidates found in a tile map back to true scene coordinates.
     """
+    from rasterio.transform import xy
+
     row_off, col_off = window_offset
     located: list[Candidate] = []
     for candidate in candidates:
-        # Affine maps (col, row) -> (x, y); + 0.5 targets the pixel centre.
-        x, y = transform * (candidate.col + col_off + 0.5, candidate.row + row_off + 0.5)
+        # rasterio.transform.xy targets the pixel centre by default.
+        x, y = xy(transform, candidate.row + row_off, candidate.col + col_off)
         located.append(
             Candidate(
                 row=candidate.row + row_off,
