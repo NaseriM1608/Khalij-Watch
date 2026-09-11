@@ -1405,6 +1405,21 @@ At 1e-7 the VH hit counts (4 and 17) are too small for tight ratios. This is
 one scene and one sea state; Phase 8 repeats it across passes and wind.
 
 **Phase 3 definition of done is met**: detections render on the map with a
-measured false-alarm rate. Still open from Phase 3: a real coastline mask
-(GSHHG) so coastal windows stop reporting shoreline, and the long bright
-streaks beside very bright targets that the Fujairah window did not detect.
+measured false-alarm rate. Still open from Phase 3: a real coastline mask, so
+coastal windows stop reporting shoreline.
+
+**The "missed bright streaks" were the geometry filter, not CFAR.** A
+diagnostic on the Fujairah window found only 10 bright pixels (at least 12x the
+sea median) outside every CFAR component, so CFAR missed nothing bright. Of 192
+components after opening, 180 passed the geometry filter, 11 failed as too
+square and 1 as too long; this settles the earlier assumption that 192 versus
+180 was the filter. Crops showed the brightest rejects were vessels: two
+single ships whose hull, the pixels within 12 dB of a very bright peak, had
+collapsed to a near-square core, and two ships lying together. The hull-based
+extent had caused it, since their whole components have ship proportions
+(aspect 1.37-1.74). A component whose hull fails the geometry test is now
+judged and measured on its whole shape, keeping the hull's position. The window
+yields 170 detections in the box instead of 167, and both open-water
+false-alarm windows are unchanged at every Pfa, so the change admitted no
+clutter there. The two ships lying together are reported as one detection.
+Still rejected: one 472 m azimuth-smeared vessel over the 450 m length limit.

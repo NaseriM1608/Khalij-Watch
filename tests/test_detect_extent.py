@@ -106,6 +106,39 @@ def test_one_sided_bleed_does_not_drag_the_position():
     assert abs(hull_vessel.col - CENTRE) < 2.0
 
 
+def with_bright_core(amplitude: np.ndarray, core_dn: float = 10_000.0) -> np.ndarray:
+    """A 3x3 superstructure-like core far brighter than the rest of the hull."""
+    out = amplitude.copy()
+    out[CENTRE - 1 : CENTRE + 2, CENTRE - 1 : CENTRE + 2] = core_dn
+    return out
+
+
+def test_a_vessel_with_a_dominant_bright_core_is_still_reported():
+    """Regression from the real Fujairah VH window: three of the brightest
+    targets (peaks 1851-2460 DN) were dropped. Within 12 dB of so bright a peak
+    only a near-square core remains, which fails the aspect test, although the
+    whole component has a ship's shape."""
+    scene = make_scene((600, 600), targets=[VESSEL], seed=21)
+
+    candidates = detect_candidates(with_bright_core(scene.amplitude), config=CONFIG)
+
+    assert len(candidates) == 1
+    vessel = candidates[0]
+    assert vessel.length_m == pytest.approx(210.0, rel=0.3)
+    # Position still comes from the bright core, not the whole component.
+    assert abs(vessel.col - CENTRE) < 2.0
+    assert abs(vessel.row - CENTRE) < 2.0
+
+
+def test_a_compact_square_blob_is_still_rejected():
+    """The whole-component check must not admit what the aspect test exists for."""
+    scene = make_scene((600, 600), seed=21)
+    blob = scene.amplitude.copy()
+    blob[CENTRE - 3 : CENTRE + 4, CENTRE - 3 : CENTRE + 4] = 1400.0
+
+    assert detect_candidates(blob, config=CONFIG) == []
+
+
 def test_hull_pixels_keep_only_the_bright_core():
     rows = np.arange(6)
     cols = np.arange(6)

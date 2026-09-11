@@ -25,6 +25,18 @@ the hulls, not the sidelobes.
 The 12 dB threshold is a heuristic chosen from that imagery, not a
 calibration. Phase 4 supplies AIS lengths for matched vessels, which is the
 ground truth needed to calibrate it or replace it with learned regression.
+
+A very bright peak can shrink the hull to its core
+--------------------------------------------------
+The threshold is relative to each target's own peak. Where one point is far
+brighter than the rest of the vessel, only a near-square core lies within
+12 dB of it, and that core fails the aspect-ratio test. On the same Fujairah
+window this dropped three of the brightest targets (peaks 1851-2460 DN)
+whose whole components had a ship's proportions; one was two vessels lying
+together. So when the hull fails the geometry test the whole component is
+judged instead, and if it passes, its extent and orientation are reported.
+Position still comes from the hull, which marks the vessel better than its
+sidelobes do.
 """
 
 from __future__ import annotations
@@ -294,7 +306,11 @@ def detect_candidates(
         hull_rows, hull_cols = hull_pixels(rows_idx, cols_idx, values, extent_peak_fraction)
         length_m, width_m, heading = measure_component(hull_rows, hull_cols)
         if apply_geometry_filter and not is_plausible_vessel(length_m, width_m, rows_idx.size):
-            continue
+            # The hull may be only a near-square core around a very bright
+            # peak; judge, and measure, the whole component instead.
+            length_m, width_m, heading = measure_component(rows_idx, cols_idx)
+            if not is_plausible_vessel(length_m, width_m, rows_idx.size):
+                continue
         candidates.append(
             Candidate(
                 row=float(hull_rows.mean()),
