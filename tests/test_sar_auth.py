@@ -222,17 +222,43 @@ def test_s3_credentials_absent_returns_none(monkeypatch):
     assert S3Credentials.from_env() is None
 
 
-def test_gdal_options_strip_the_scheme_from_the_endpoint():
-    """GDAL wants a bare host in AWS_S3_ENDPOINT, not a URL."""
-    options = S3Credentials("AK", "SK").gdal_options()
-
-    assert options["AWS_S3_ENDPOINT"] == "eodata.dataspace.copernicus.eu"
-    assert "https://" not in options["AWS_S3_ENDPOINT"]
+def test_endpoint_host_strips_the_scheme():
+    """GDAL wants a bare host for the S3 endpoint, not a URL."""
+    assert S3Credentials("AK", "SK").endpoint_host == "eodata.dataspace.copernicus.eu"
+    assert S3Credentials("AK", "SK", "http://example.test/").endpoint_host == "example.test"
 
 
-def test_gdal_options_avoid_listing_the_bucket():
+def test_gdal_config_carries_no_credentials():
+    """The regression this pins: rasterio raises EnvError for keys passed as
+    GDAL options. An earlier version returned them here, so the read path
+    crashed the first time it met a real raster while every test passed.
+    """
+    config = S3Credentials("AKIDEXAMPLE", "SECRETEXAMPLE").gdal_config()
+
+    assert "AWS_ACCESS_KEY_ID" not in config
+    assert "AWS_SECRET_ACCESS_KEY" not in config
+    assert "SECRETEXAMPLE" not in config.values()
+
+
+def test_gdal_config_avoids_listing_the_bucket():
     """Without this GDAL pulls far more than the window needs from a COG."""
-    options = S3Credentials("AK", "SK").gdal_options()
+    config = S3Credentials("AK", "SK").gdal_config()
 
-    assert options["GDAL_DISABLE_READDIR_ON_OPEN"] == "EMPTY_DIR"
-    assert options["AWS_VIRTUAL_HOSTING"] == "FALSE"
+    assert config["GDAL_DISABLE_READDIR_ON_OPEN"] == "EMPTY_DIR"
+    assert config["AWS_VIRTUAL_HOSTING"] == "FALSE"
+
+
+def test_rasterio_env_accepts_the_credentials():
+    """Hand the keys to rasterio itself - the step the original tests skipped.
+
+    Building and entering the environment is local: no request is made.
+    """
+    pytest.importorskip("rasterio")
+    pytest.importorskip("boto3")
+    from rasterio.env import Env
+
+    env = S3Credentials("AKIDEXAMPLE", "SECRETEXAMPLE").rasterio_env()
+
+    assert isinstance(env, Env)
+    with env:
+        pass

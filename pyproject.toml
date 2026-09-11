@@ -19,6 +19,8 @@ dependencies = [
     "shapely>=2.0",
     "pyproj>=3.6",
     "rasterio>=1.4",
+    # rasterio only accepts S3 credentials through its AWSSession, which uses boto3.
+    "boto3>=1.34",
     "pyais>=2.6",
     "structlog>=24.4",
     "python-dotenv>=1.0",

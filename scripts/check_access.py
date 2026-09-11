@@ -203,8 +203,110 @@ def check_cdse_credentials() -> Result:
     )
 
 
+# How long the pixel probe may run before it is abandoned. Covers a catalogue
+# query, an object listing and one windowed read over a slow link.
+PIXEL_PROBE_TIMEOUT_S = 120
+# How long the probe gets to exit by itself once it has reported.
+PIXEL_PROBE_EXIT_GRACE_S = 3
+
+
+def result_from_verdict(
+    verdict: dict | None, *, timed_out: bool = False, stderr_tail: str = ""
+) -> Result:
+    """Translate the pixel probe's JSON verdict into a check result."""
+    from core.sar.reader import REMEDIES
+
+    name = "CDSE pixel access"
+    if timed_out:
+        return Result(
+            name,
+            False,
+            f"no answer within {PIXEL_PROBE_TIMEOUT_S}s",
+            ["object storage or the catalogue is unreachable or very slow; retry"],
+        )
+    if verdict is None:
+        tail = stderr_tail.strip().splitlines()[-4:] if stderr_tail else []
+        return Result(name, False, "the probe process ended without reporting a result", tail)
+
+    if verdict.get("ok"):
+        shape = "x".join(str(v) for v in verdict.get("shape", []))
+        return Result(
+            name,
+            True,
+            f"read a {shape} window of real pixels in {verdict.get('seconds')}s "
+            "through the production reader",
+            [f"scene: {verdict.get('product')}", f"max DN in window: {verdict.get('max_dn')}"],
+        )
+
+    reason = str(verdict.get("reason") or "other")
+    notes = [REMEDIES.get(reason, REMEDIES["other"])]
+    detail = str(verdict.get("detail") or "")
+    if detail:
+        notes.append(f"detail: {detail[:200]}")
+    return Result(name, False, f"S3 keys are set but reading pixels failed ({reason})", notes)
+
+
+def check_s3_pixel_read(timeout_s: float = PIXEL_PROBE_TIMEOUT_S) -> Result:
+    """Read real pixels from a recent Gulf scene through the production reader.
+
+    Runs in a child process, for two measured reasons. After a failed request
+    GDAL on this host can leave the process unable to exit - even ``os._exit``
+    does not return - so the child is terminated from outside once it has
+    reported; killing it skips the native teardown that hangs. And a stalled
+    network must not freeze the whole check.
+    """
+    import json
+    import subprocess
+    import threading
+
+    root = Path(__file__).resolve().parents[1]
+    code = (
+        "import sys; "
+        f"sys.path.insert(0, {str(root)!r}); "
+        "from core.sar.reader import probe_main; probe_main()"
+    )
+    try:
+        child = subprocess.Popen(
+            [sys.executable, "-c", code],
+            cwd=root,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+        )
+    except OSError as exc:
+        return Result("CDSE pixel access", False, f"could not start the probe: {exc}")
+
+    reported: list[str] = []
+    stderr_lines: list[str] = []
+    stdout_reader = threading.Thread(
+        target=lambda: reported.append(child.stdout.readline()), daemon=True
+    )
+    stderr_reader = threading.Thread(target=lambda: stderr_lines.extend(child.stderr), daemon=True)
+    stdout_reader.start()
+    stderr_reader.start()
+    stdout_reader.join(timeout_s)
+    timed_out = stdout_reader.is_alive()
+
+    try:
+        child.wait(timeout=PIXEL_PROBE_EXIT_GRACE_S)
+    except subprocess.TimeoutExpired:
+        child.kill()
+        child.wait()
+    stderr_reader.join(1.0)
+
+    verdict = None
+    if reported and reported[0].strip():
+        try:
+            verdict = json.loads(reported[0])
+        except json.JSONDecodeError:
+            verdict = None
+    return result_from_verdict(verdict, timed_out=timed_out, stderr_tail="".join(stderr_lines))
+
+
 def check_cdse_download() -> Result:
-    """Confirm the token can actually READ PIXELS, not merely authenticate.
+    """Confirm the credentials can actually READ PIXELS, not merely authenticate.
 
     These are separate entitlements at CDSE, and conflating them hides a real
     failure: a Sentinel Hub OAuth client authenticates happily and is then
@@ -216,11 +318,9 @@ def check_cdse_download() -> Result:
     from core.sar.auth import AuthError, S3Credentials, TokenManager
 
     if S3Credentials.from_env() is not None:
-        return Result(
-            "CDSE pixel access",
-            True,
-            "S3 credentials present (the byte-range path used for windowed reads)",
-        )
+        # Presence proves nothing: an earlier version returned PASS here for
+        # keys that had never been used, while the read path itself crashed.
+        return check_s3_pixel_read()
 
     manager = TokenManager()
     if not manager.is_configured:

@@ -1261,3 +1261,56 @@ authenticates and queries the catalogue, but the download service refuses it
 with `DAT-ZIP-609: Token audience not allowed`. Reading pixels needs **S3
 credentials**, generated separately in the CDSE dashboard - and that is also
 the only path supporting byte-range windowed reads.
+
+### 2026-09-11 - Phase 3 on real imagery
+
+**S3 keys verified end to end.** Listing, a ranged GET returning 206, and a
+windowed read of a live Sentinel-1 scene all succeed. `scripts/check_access.py`
+now reads real pixels through the production reader. It previously reported
+PASS merely because the keys were set.
+
+Real data exposed five problems that synthetic tests could not:
+
+1. **The credential helper crashed on first real use.** rasterio refuses AWS
+   keys passed as GDAL options (`EnvError`) and accepts them only through an
+   `AWSSession`, which needs boto3. The unit tests checked the dictionary the
+   helper returned and never handed it to rasterio, so they passed while the
+   read path was broken. Credentials now travel through the session, and a
+   test builds the real rasterio environment.
+2. **Sentinel-1 GRD scenes are not map-projected.** The COG variant has no
+   CRS, an identity transform and 210 ground control points. Windowing,
+   georeferencing and platform masking all assumed a geotransform, which would
+   have placed every pixel at longitude = column. They now go through
+   `core/sar/georef.py`. This corrects the plan: the COG removes the SNAP
+   install, but not the need to handle radar geometry.
+3. **GDAL default control-point polynomial is off by up to 1.2 km** on this
+   grid. A thin-plate spline reproduces the control points exactly, with a
+   leave-one-out error of 26 m mean and 55 m p90. AIS matching needs the spline.
+4. **The image is mirrored** on descending passes: columns run east to west.
+   Headings are computed geographically.
+5. **Sidelobes inflate vessel extent.** On a VH window over the Fujairah
+   anchorage (192 vessels) the CFAR mask gave a median 289 x 135 m, with 89% of
+   widths above 80 m. Measuring only pixels within 12 dB of each target peak
+   gave 208 x 62 m, with 16% above 80 m. That threshold is a heuristic until
+   Phase 4 AIS lengths calibrate it. Heading alignment with the azimuth axis was
+   about 39% under both measurements, so headings follow hulls rather than
+   sidelobes; ships at anchor lying to the current explain the clustering.
+
+**Operational findings.** After a failed request, a process that used GDAL
+can fail to exit, even through `os._exit`, which points at native library
+teardown. The pixel check therefore runs in a child process that is terminated
+once it has reported. DNS on this host also fails intermittently mid-session,
+so the reader retries transport errors but never credential errors, which it
+names specifically: unknown access key versus wrong secret.
+
+**First real detection run.** A 23 x 23 km VH window over the Fujairah
+anchorage read in 2.2 s and ran CFAR in 1.2 s. The detections sit on the vessel
+grid in the annotated preview; a few long bright streaks beside very bright
+targets were not detected. With hull-based extents the 180 candidates
+measure 212 x 63 m at the median (lengths 121-324 m and widths 47-86 m from
+p10 to p90; 16% of widths above 80 m, 3% above 120 m). The widest few are
+consistent with two hulls merged, such as a bunker barge alongside a tanker,
+which is common at Fujairah, but that has not been verified. VH stays the default: on the same window VV gave 282
+components against 192, with far brighter returns (peak 14271 DN against 2911),
+which is consistent with more sidelobe fragmentation but has not been checked
+by eye.

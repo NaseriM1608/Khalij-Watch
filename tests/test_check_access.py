@@ -83,3 +83,70 @@ def test_acquisition_timestamps_parse_as_utc():
     parsed = dt.datetime.strptime(stamp[:19], "%Y-%m-%dT%H:%M:%S")
 
     assert parsed.year == 2026 and parsed.hour == 2
+
+
+# --------------------------------------------------------------------------
+# Pixel-access verdicts
+# --------------------------------------------------------------------------
+
+
+def test_a_successful_probe_passes_with_its_evidence():
+    from check_access import result_from_verdict
+
+    result = result_from_verdict(
+        {
+            "ok": True,
+            "reason": "ok",
+            "product": "S1D_IW_GRDH_1SDV_TEST_COG.SAFE",
+            "shape": [256, 256],
+            "max_dn": 124,
+            "seconds": 2.1,
+        }
+    )
+
+    assert result.ok
+    assert "256x256" in result.detail
+    assert any("S1D_IW_GRDH_1SDV_TEST_COG.SAFE" in note for note in result.notes)
+
+
+def test_a_wrong_secret_is_named_as_the_problem():
+    from check_access import result_from_verdict
+
+    result = result_from_verdict(
+        {"ok": False, "reason": "wrong_secret", "detail": "SignatureDoesNotMatch"}
+    )
+
+    assert not result.ok
+    assert "wrong_secret" in result.detail
+    assert any("secret" in note for note in result.notes)
+
+
+def test_an_unknown_key_points_at_expiry_and_the_key_manager():
+    from check_access import result_from_verdict
+
+    result = result_from_verdict({"ok": False, "reason": "unknown_access_key"})
+
+    remedy = " ".join(result.notes)
+    assert "expiry" in remedy
+    assert "eodata-s3keysmanager.dataspace.copernicus.eu" in remedy
+
+
+def test_a_probe_that_never_answers_fails_rather_than_passes():
+    from check_access import result_from_verdict
+
+    result = result_from_verdict(None, timed_out=True)
+
+    assert not result.ok
+    assert "no answer" in result.detail
+
+
+def test_a_probe_that_dies_silently_surfaces_its_error_output():
+    from check_access import result_from_verdict
+
+    result = result_from_verdict(
+        None,
+        stderr_tail="Traceback (most recent call last):\nModuleNotFoundError: No module named rasterio\n",
+    )
+
+    assert not result.ok
+    assert any("ModuleNotFoundError" in note for note in result.notes)

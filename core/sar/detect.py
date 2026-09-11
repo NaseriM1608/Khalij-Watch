@@ -8,6 +8,23 @@ clutter spikes are single pixels or blobs; ships are elongated objects of a
 plausible size. Filtering on measured length, width and aspect ratio removes
 most surviving false alarms at essentially no cost, and yields the length
 estimate that later becomes a first-class model output.
+
+A bright vessel's CFAR mask includes its sidelobes
+--------------------------------------------------
+A strong target throws a cross of sidelobes along azimuth and range, and
+against quiet sea those sidelobes clear the CFAR threshold as well. Measuring
+the whole mask therefore describes the cross rather than the ship. On a real
+VH window over the Fujairah anchorage (Sentinel-1D, 2026-09-10, 192 vessels)
+the mask gave a median extent of 289 m x 135 m, with 89% of widths above
+80 m - broader than any ship afloat. Measuring only the pixels within 12 dB
+of each target's peak amplitude gave 208 m x 62 m, with 16% above 80 m,
+which is consistent with an anchorage of tankers and bulk carriers. Heading
+alignment with the azimuth axis was the same either way, so headings follow
+the hulls, not the sidelobes.
+
+The 12 dB threshold is a heuristic chosen from that imagery, not a
+calibration. Phase 4 supplies AIS lengths for matched vessels, which is the
+ground truth needed to calibrate it or replace it with learned regression.
 """
 
 from __future__ import annotations
@@ -33,10 +50,21 @@ MAX_ASPECT_RATIO = 14.0
 # Discard components smaller than this: a lone bright pixel is speckle.
 MIN_PIXELS = 3
 
+# Only pixels at or above this fraction of a target's peak amplitude count
+# towards its extent and position. 0.25 in amplitude is -12 dB. See the
+# module docstring for how it was chosen and why it is provisional.
+EXTENT_PEAK_FRACTION = 0.25
+
 
 @dataclass(frozen=True)
 class Candidate:
-    """A vessel-like object measured in a SAR scene."""
+    """A vessel-like object measured in a SAR scene.
+
+    ``row``, ``col``, ``length_m``, ``width_m`` and ``heading_deg`` describe
+    the target's hull, excluding sidelobes. ``pixel_count`` and the amplitude
+    statistics cover the whole CFAR component. ``heading_deg`` is in the image
+    frame until :func:`georeference` converts it to a compass bearing.
+    """
 
     row: float
     col: float
@@ -85,6 +113,14 @@ def label_components(mask: np.ndarray) -> tuple[np.ndarray, int]:
     """Label 8-connected components with a two-pass union-find.
 
     Returns the label image (0 = background) and the number of components.
+
+    Only foreground pixels are visited. After CFAR and morphological opening a
+    real scene window is overwhelmingly background, so iterating every pixel
+    in Python - as an earlier version did - spent minutes on a multi-megapixel
+    window doing nothing. ``np.nonzero`` yields foreground in raster order,
+    which is exactly the order the first pass needs: every neighbour it
+    consults (the row above, and the pixel to the left) has already been
+    labelled.
     """
     rows, cols = mask.shape
     labels = np.zeros((rows, cols), dtype=np.int32)
@@ -101,44 +137,64 @@ def label_components(mask: np.ndarray) -> tuple[np.ndarray, int]:
         if ra != rb:
             parent[max(ra, rb)] = min(ra, rb)
 
-    # First pass: provisional labels plus equivalences.
-    for r in range(rows):
-        for c in range(cols):
-            if not mask[r, c]:
-                continue
-            neighbours = []
-            if r > 0:
-                for dc in (-1, 0, 1):
-                    cc = c + dc
-                    if 0 <= cc < cols and labels[r - 1, cc]:
-                        neighbours.append(labels[r - 1, cc])
-            if c > 0 and labels[r, c - 1]:
-                neighbours.append(labels[r, c - 1])
+    fg_rows, fg_cols = np.nonzero(mask)
+    foreground = list(zip(fg_rows.tolist(), fg_cols.tolist(), strict=True))
 
-            if not neighbours:
-                parent.append(len(parent))
-                labels[r, c] = len(parent) - 1
-            else:
-                smallest = min(neighbours)
-                labels[r, c] = smallest
-                for other in neighbours:
-                    union(smallest, other)
+    # First pass: provisional labels plus equivalences.
+    for r, c in foreground:
+        neighbours: list[int] = []
+        if r > 0:
+            for cc in (c - 1, c, c + 1):
+                if 0 <= cc < cols:
+                    above = int(labels[r - 1, cc])
+                    if above:
+                        neighbours.append(above)
+        if c > 0:
+            left = int(labels[r, c - 1])
+            if left:
+                neighbours.append(left)
+
+        if not neighbours:
+            parent.append(len(parent))
+            labels[r, c] = len(parent) - 1
+        else:
+            smallest = min(neighbours)
+            labels[r, c] = smallest
+            for other in neighbours:
+                union(smallest, other)
 
     # Second pass: collapse equivalences to dense consecutive ids.
     remap: dict[int, int] = {}
-    for r in range(rows):
-        for c in range(cols):
-            if not labels[r, c]:
-                continue
-            root = find(labels[r, c])
-            if root not in remap:
-                remap[root] = len(remap) + 1
-            labels[r, c] = remap[root]
+    for r, c in foreground:
+        root = find(int(labels[r, c]))
+        if root not in remap:
+            remap[root] = len(remap) + 1
+        labels[r, c] = remap[root]
     return labels, len(remap)
 
 
+def hull_pixels(
+    rows_idx: np.ndarray,
+    cols_idx: np.ndarray,
+    values: np.ndarray,
+    fraction: float = EXTENT_PEAK_FRACTION,
+) -> tuple[np.ndarray, np.ndarray]:
+    """The component pixels that belong to the target rather than its sidelobes.
+
+    Keeps pixels at or above ``fraction`` of the component's peak amplitude.
+    A fraction of zero, or a result too small to measure, returns the whole
+    component unchanged.
+    """
+    if fraction <= 0.0 or values.size == 0:
+        return rows_idx, cols_idx
+    keep = values >= fraction * float(values.max())
+    if int(keep.sum()) < 2:
+        return rows_idx, cols_idx
+    return rows_idx[keep], cols_idx[keep]
+
+
 def measure_component(rows_idx: np.ndarray, cols_idx: np.ndarray) -> tuple[float, float, float]:
-    """Measure a component's length, width and orientation by PCA.
+    """Measure a set of pixels' length, width and orientation by PCA.
 
     The principal axis of the pixel cloud gives the vessel's heading, and the
     extent of the pixels projected onto each axis gives length and width.
@@ -187,8 +243,13 @@ def detect_candidates(
     config: CfarConfig | None = None,
     mask: np.ndarray | None = None,
     apply_geometry_filter: bool = True,
+    extent_peak_fraction: float = EXTENT_PEAK_FRACTION,
 ) -> list[Candidate]:
-    """Run the full pixel-to-candidate pipeline on one window."""
+    """Run the full pixel-to-candidate pipeline on one window.
+
+    ``extent_peak_fraction`` controls how much of each component counts as
+    hull when measuring geometry; zero measures the raw CFAR mask.
+    """
     config = config or CfarConfig()
     hits = cfar_detect(amplitude, config, mask=mask)
     cleaned = _binary_opening(hits)
@@ -196,19 +257,30 @@ def detect_candidates(
     if count == 0:
         return []
 
+    # Group foreground pixels by component once. Re-scanning the whole label
+    # image for every component - as an earlier version did - is quadratic,
+    # and a real coastal window easily holds hundreds of components.
+    fg_rows, fg_cols = np.nonzero(labels)
+    fg_labels = labels[fg_rows, fg_cols]
+    order = np.argsort(fg_labels, kind="stable")
+    fg_rows, fg_cols, fg_labels = fg_rows[order], fg_cols[order], fg_labels[order]
+    boundaries = np.flatnonzero(np.diff(fg_labels)) + 1
+
     candidates: list[Candidate] = []
-    for label in range(1, count + 1):
-        rows_idx, cols_idx = np.nonzero(labels == label)
+    for rows_idx, cols_idx in zip(
+        np.split(fg_rows, boundaries), np.split(fg_cols, boundaries), strict=True
+    ):
         if rows_idx.size == 0:
             continue
-        length_m, width_m, heading = measure_component(rows_idx, cols_idx)
+        values = amplitude[rows_idx, cols_idx]
+        hull_rows, hull_cols = hull_pixels(rows_idx, cols_idx, values, extent_peak_fraction)
+        length_m, width_m, heading = measure_component(hull_rows, hull_cols)
         if apply_geometry_filter and not is_plausible_vessel(length_m, width_m, rows_idx.size):
             continue
-        values = amplitude[rows_idx, cols_idx]
         candidates.append(
             Candidate(
-                row=float(rows_idx.mean()),
-                col=float(cols_idx.mean()),
+                row=float(hull_rows.mean()),
+                col=float(hull_cols.mean()),
                 length_m=length_m,
                 width_m=width_m,
                 heading_deg=heading,
@@ -221,32 +293,50 @@ def detect_candidates(
 
 
 def georeference(
-    candidates: list[Candidate], transform, window_offset: tuple[int, int] = (0, 0)
+    candidates: list[Candidate],
+    georef: object,
+    window_offset: tuple[int, int] = (0, 0),
 ) -> list[Candidate]:
-    """Attach lon/lat to candidates using a raster affine transform.
+    """Attach longitude, latitude and a true compass heading to candidates.
 
-    ``window_offset`` is the (row, col) origin of the window within the scene,
-    so candidates found in a tile map back to true scene coordinates.
+    ``georef`` is a :class:`core.sar.georef.SceneGeoref` - required for
+    Sentinel-1 GRD scenes, which are located by ground control points - or an
+    affine transform for a north-up lon/lat raster. ``window_offset`` is the
+    (row, col) origin of the window within the scene, so candidates found in a
+    tile map back to true scene coordinates.
+
+    Heading is recomputed, not carried over. :func:`measure_component` reports
+    it in the image frame, which is a compass bearing only if the image is
+    north-up. GRD scenes are not: on a descending pass columns run east to
+    west, which mirrors every heading.
     """
-    from rasterio.transform import xy
+    from dataclasses import replace
+
+    from core.sar.georef import SceneGeoref
+
+    if not candidates:
+        return []
+    scene = georef if isinstance(georef, SceneGeoref) else SceneGeoref.from_affine(georef)
 
     row_off, col_off = window_offset
-    located: list[Candidate] = []
-    for candidate in candidates:
-        # rasterio.transform.xy targets the pixel centre by default.
-        x, y = xy(transform, candidate.row + row_off, candidate.col + col_off)
-        located.append(
-            Candidate(
-                row=candidate.row + row_off,
-                col=candidate.col + col_off,
-                length_m=candidate.length_m,
-                width_m=candidate.width_m,
-                heading_deg=candidate.heading_deg,
-                pixel_count=candidate.pixel_count,
-                peak_amplitude=candidate.peak_amplitude,
-                mean_amplitude=candidate.mean_amplitude,
-                lon=float(x),
-                lat=float(y),
-            )
+    rows = np.array([c.row + row_off for c in candidates], dtype=np.float64)
+    cols = np.array([c.col + col_off for c in candidates], dtype=np.float64)
+    lons, lats = scene.lonlat(rows, cols)
+
+    # Inverse of measure_component's image-frame heading, h = atan2(dcol, -drow).
+    radians = np.radians([c.heading_deg for c in candidates])
+    headings = scene.bearings(rows, cols, -np.cos(radians), np.sin(radians)) % 180.0
+
+    return [
+        replace(
+            candidate,
+            row=float(row),
+            col=float(col),
+            lon=float(lon),
+            lat=float(lat),
+            heading_deg=float(heading),
         )
-    return located
+        for candidate, row, col, lon, lat, heading in zip(
+            candidates, rows, cols, lons, lats, headings, strict=True
+        )
+    ]

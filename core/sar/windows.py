@@ -125,27 +125,17 @@ def tile_window(
 
 
 def bbox_to_window(dataset: Any, bbox: BBox) -> PixelWindow:
-    """Convert a geographic bbox to a pixel window on an open dataset."""
-    from rasterio.warp import transform_bounds
-    from rasterio.windows import from_bounds
+    """Convert a geographic bbox to a pixel window on an open dataset.
 
-    left, bottom, right, top = transform_bounds(
-        "EPSG:4326",
-        dataset.crs,
-        bbox.min_lon,
-        bbox.min_lat,
-        bbox.max_lon,
-        bbox.max_lat,
-        densify_pts=21,
-    )
-    raw = from_bounds(left, bottom, right, top, transform=dataset.transform)
-    window = PixelWindow(
-        col_off=math.floor(raw.col_off),
-        row_off=math.floor(raw.row_off),
-        width=math.ceil(raw.width),
-        height=math.ceil(raw.height),
-    )
-    return clamp_window(window, dataset.width, dataset.height)
+    Handles map-projected rasters and Sentinel-1 GRD scenes alike. GRD scenes
+    carry ground control points instead of a geotransform: an earlier version
+    read ``dataset.crs`` and ``dataset.transform`` directly, and on a real
+    scene those are ``None`` and the identity, so it could not locate a single
+    pixel. See :mod:`core.sar.georef`.
+    """
+    from core.sar.georef import SceneGeoref
+
+    return SceneGeoref.from_dataset(dataset).window_for_bbox(bbox)
 
 
 def read_window(dataset: Any, window: PixelWindow, *, band: int = 1) -> np.ndarray:

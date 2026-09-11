@@ -22,8 +22,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
+from typing import TYPE_CHECKING
 
 from core.net import open_with_retry
+
+if TYPE_CHECKING:  # pragma: no cover
+    from rasterio.env import Env
 
 TOKEN_URL = (
     "https://identity.dataspace.copernicus.eu/auth/realms/CDSE/protocol/openid-connect/token"
@@ -211,19 +215,50 @@ class S3Credentials:
             endpoint=os.environ.get("CDSE_S3_ENDPOINT", S3_ENDPOINT),
         )
 
-    def gdal_options(self) -> dict[str, str]:
-        """GDAL configuration for ``/vsis3/`` access to CDSE object storage."""
-        host = self.endpoint.removeprefix("https://").removeprefix("http://")
+    @property
+    def endpoint_host(self) -> str:
+        """The endpoint as a bare host, which is what GDAL expects."""
+        return self.endpoint.removeprefix("https://").removeprefix("http://").rstrip("/")
+
+    def gdal_config(self) -> dict[str, str]:
+        """Non-secret GDAL settings for ``/vsis3/`` access to CDSE storage.
+
+        Deliberately carries NO credentials. rasterio refuses AWS keys passed
+        as GDAL options: it raises ``EnvError`` and insists they travel in a
+        session object. An earlier version returned the keys from here, so the
+        read path crashed the first time it met a real raster while every unit
+        test passed, because no test ever opened a raster through it.
+        """
         return {
-            "AWS_S3_ENDPOINT": host,
-            "AWS_ACCESS_KEY_ID": self.access_key,
-            "AWS_SECRET_ACCESS_KEY": self.secret_key,
-            "AWS_REGION": S3_REGION,
+            # Path-style addressing: a virtual-hosted request would prepend the
+            # bucket name to the endpoint host, which does not resolve.
             "AWS_VIRTUAL_HOSTING": "FALSE",
             "AWS_HTTPS": "YES",
-            # Read only the byte ranges actually needed. Without this GDAL will
-            # happily pull far more of the object than the window requires,
-            # which defeats the entire point of using a COG.
+            # Read only the byte ranges actually needed. Without this GDAL
+            # lists the product directory and pulls far more than the window
+            # requires, which defeats the point of a COG.
             "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
             "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.tiff,.TIF,.TIFF",
+            # Not running on EC2, so never probe the instance metadata service.
+            "CPL_AWS_AUTODETECT_EC2": "NO",
+            "GDAL_HTTP_TIMEOUT": "60",
+            "GDAL_HTTP_MAX_RETRY": "3",
+            "GDAL_HTTP_RETRY_DELAY": "2",
         }
+
+    def rasterio_env(self) -> Env:
+        """A ``rasterio.Env`` able to read from CDSE object storage.
+
+        Credentials travel through rasterio's ``AWSSession``, the only route
+        it accepts; everything else is plain GDAL configuration. Needs boto3.
+        """
+        from rasterio.env import Env
+        from rasterio.session import AWSSession
+
+        session = AWSSession(
+            aws_access_key_id=self.access_key,
+            aws_secret_access_key=self.secret_key,
+            region_name=S3_REGION,
+            endpoint_url=self.endpoint_host,
+        )
+        return Env(session=session, **self.gdal_config())

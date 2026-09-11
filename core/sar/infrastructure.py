@@ -185,34 +185,53 @@ class InfrastructureMask:
 
     def rasterise(
         self,
-        transform,
+        georef: object,
         width: int,
         height: int,
         *,
         geographic: bool | None = None,
+        window_offset: tuple[int, int] = (0, 0),
     ):
-        """Build a boolean mask for a raster window.
+        """Build a boolean exclusion mask for a raster window.
 
-        ``transform`` is an affine mapping pixel to world coordinates, as
-        carried by any rasterio dataset. ``geographic`` says whether the CRS
-        is in degrees; pass it explicitly when known, since inferring it from
-        pixel size is a guess (see :meth:`_radius_in_pixels`).
+        ``georef`` is a :class:`core.sar.georef.SceneGeoref` - required for
+        Sentinel-1 GRD scenes, which are located by ground control points
+        rather than a geotransform - or an affine transform for a north-up
+        lon/lat raster. ``window_offset`` is the (row, col) origin of this
+        window within the scene. ``geographic`` applies only to the affine
+        form, where it says whether the transform is in degrees (see
+        :meth:`_radius_in_pixels`).
         """
         import numpy as np
-        from rasterio.transform import rowcol
+
+        from core.sar.georef import SceneGeoref
 
         mask = np.zeros((height, width), dtype=bool)
         if not self._platforms:
             return mask
 
-        lons = [p.lon for p in self._platforms]
-        lats = [p.lat for p in self._platforms]
-        # op=float keeps sub-pixel precision; the default rounds to int.
-        rows, cols = rowcol(transform, lons, lats, op=float)
+        row_off, col_off = window_offset
+        if isinstance(georef, SceneGeoref):
+            scene = georef
+            # The finer of the two pixel spacings, so the disc is never too small.
+            spacing = min(scene.metres_per_pixel(row_off + height / 2.0, col_off + width / 2.0))
+            radii = [self._radius_m / max(spacing, 1e-6)] * len(self._platforms)
+        else:
+            scene = SceneGeoref.from_affine(georef)
+            radii = [
+                self._radius_in_pixels(georef, p.lat, geographic=geographic)
+                for p in self._platforms
+            ]
 
-        for platform, row, col in zip(self._platforms, rows, cols, strict=True):
-            radius_px = self._radius_in_pixels(transform, platform.lat, geographic=geographic)
-            _stamp_disc(mask, float(col), float(row), radius_px)
+        rows, cols = scene.raster_coords(
+            [p.lon for p in self._platforms], [p.lat for p in self._platforms]
+        )
+        for row, col, radius_px in zip(rows, cols, radii, strict=True):
+            if not (math.isfinite(row) and math.isfinite(col)):
+                continue
+            # raster_coords is corner-based, so a pixel-index centre sits half
+            # a pixel back; then shift into this window's own frame.
+            _stamp_disc(mask, col - 0.5 - col_off, row - 0.5 - row_off, radius_px)
         return mask
 
     def _radius_in_pixels(self, transform, lat: float, *, geographic: bool | None = None) -> float:
