@@ -1314,3 +1314,97 @@ which is common at Fujairah, but that has not been verified. VH stays the defaul
 components against 192, with far brighter returns (peak 14271 DN against 2911),
 which is consistent with more sidelobe fragmentation but has not been checked
 by eye.
+
+### 2026-09-11 - Phase 3 detections stored, served and drawn
+
+**Detections persist per window, and a re-run replaces them.**
+`DetectionRepository.replace_in_bbox` replaces one scene's detections for one
+polarisation and detector inside the window's box. Re-running a window, after
+a threshold change or by accident, never doubles the vessel count, and VV and
+VH never overwrite each other. On the real Fujairah VH window: 167 stored;
+after a re-run, still 167 rows and 167 index entries. Detections outside the
+requested box are no longer reported: on a rotated scene the pixel window
+reaches past the box, and those 13 would have survived a re-run of an
+overlapping box as duplicates. Each row records `detector_version` (such as
+`L4.4-g24-t40-p1e-06-h0.25`: looks, guard, training, Pfa, hull fraction), the
+channel, pixel count and peak DN. CFAR stores confidence 1.0, meaning only
+"passed the test"; it must never be ranked against a learned probability.
+
+**Additive schema changes migrate themselves.** `create_all` never alters an
+existing table, so `_add_missing_columns` adds new nullable columns to an
+existing SQLite database and refuses anything else. No Alembic before the
+PostGIS move.
+
+**The R\*Tree is not an exact filter.** It stores 32-bit floats rounded
+outward. Measured on 20,000 random Gulf points: none were missed by a box
+equal to the point, but 19,503 were returned by a query box 1 cm away from
+them, so it matches up to ~0.4 m outside a box. Harmless for map queries. For
+the replacement delete it removed a neighbouring window's detection lying that
+close to the shared edge, which a test reproduced. The delete now compares the
+stored doubles as well. A code review had flagged the rounding but predicted
+the opposite failure, missed rows and duplicates, which the measurement rules
+out.
+
+**The console draws radar detections as hollow rings**, distinct from filled
+AIS symbols, fading with the age of the pass over days rather than hours.
+`GET /api/detections` joins each detection to its pass and returns
+`age_hours`. Clicking a ring states when it was seen and by which satellite
+and channel, its size, both possible headings (radar cannot tell bow from
+stern), the detector version, and that it has not been matched against AIS.
+Fixed on the way: data that reached the map before the basemap style loaded
+was never drawn, because readiness was held in a ref rather than state.
+
+**Land-mask bug found in Phase 1.5 code.** `_OMAN_INTERIOR` reached 25.6 N
+between 57.2 and 58.8 E, which is the open Gulf of Oman, and covered Muscat's
+port while missing the actual interior. Every AIS position in the eastern
+approach to Hormuz would have been flagged `ON_LAND`, and CFAR detections there
+dropped as inland. The synthetic calibration never saw it because the seeded
+shipping lane stays west of 56.8 E. It surfaced when the false-alarm script
+refused two open-water windows. Corrected, with regression points.
+
+**GDAL exit hang, second trigger.** Three processes that opened a scene over
+S3, computed a window and closed it without reading, refused by that land
+check, each hung at exit until a 300 s timeout killed them. No request had
+failed; previously the hang had only followed failed requests. Root cause
+still unknown. The false-alarm script now refuses a window from its
+coordinates, before opening anything.
+
+**Measured CFAR false-alarm rate on real open-sea clutter** (the remaining
+Phase 3 criterion). Real imagery has no truth, so `core/sar/false_alarms.py`
+measures what can be measured honestly: the fraction of sea pixels the CFAR
+test fires on, away from every object it found (250 m exclusion), across a Pfa
+sweep that shares one clutter area per window. On synthetic Gamma clutter it
+recovers the requested rate within 15%. Scene S1D 2026-09-10 02:06 UTC, two
+open Gulf of Oman windows of about 1,210 km2 each, no platforms in either:
+
+| Pfa requested | VH 57.90 E 24.80 N | VH 57.35 E 25.15 N | VV 57.90 E 24.80 N |
+|---|---|---|---|
+| 1e-3 | 0.78x (9,462 hits) | 0.88x (10,618) | 1.57x (19,018) |
+| 1e-4 | 0.80x (975) | 0.89x (1,070) | 2.60x (3,143) |
+| 1e-5 | 1.06x (128) | 1.01x (122) | 5.43x (658) |
+| 1e-6 | 2.97x (36) | 2.07x (25) | 18.2x (220) |
+| 1e-7 | 14.0x (17) | 3.3x (4) | 95x (115) |
+| candidates at 1e-6 | 1 (0.08 per 100 km2) | 2 (0.17) | 7 (0.58) |
+
+1. **In VH the Pfa setting holds to 1e-5, then under-promises**: 2-3x the
+   requested pixel rate at the 1e-6 operating point. The extreme tail of real
+   sea clutter is heavier than Gamma(L=4.4). The slight shortfall at loose
+   settings may mean an effective number of looks above 4.4; not measured.
+2. **Pixel false alarms do not become objects.** VH candidate counts barely
+   move across four decades of Pfa (4 to 1, and 2 to 2), so opening and the
+   geometry filter absorb the excess. At the operating point that is 0.08 and
+   0.17 candidates per 100 km2 of open water: upper bounds on object false
+   alarms, since some or all may be real vessels, which only AIS can settle.
+3. **VV is far worse on clutter**: 18x the requested rate at 1e-6 on the same
+   pass and window, and its candidates fall steadily with Pfa (18 to 6)
+   instead of levelling off, the signature of clutter-driven detections. This
+   is evidence for VH as the detection channel, not proof: VV could also be
+   seeing small targets that VH misses.
+
+At 1e-7 the VH hit counts (4 and 17) are too small for tight ratios. This is
+one scene and one sea state; Phase 8 repeats it across passes and wind.
+
+**Phase 3 definition of done is met**: detections render on the map with a
+measured false-alarm rate. Still open from Phase 3: a real coastline mask
+(GSHHG) so coastal windows stop reporting shoreline, and the long bright
+streaks beside very bright targets that the Fujairah window did not detect.
