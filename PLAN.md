@@ -1423,3 +1423,38 @@ yields 170 detections in the box instead of 167, and both open-water
 false-alarm windows are unchanged at every Pfa, so the change admitted no
 clutter there. The two ships lying together are reported as one detection.
 Still rejected: one 472 m azimuth-smeared vessel over the 450 m length limit.
+
+**Coastline mask from OpenStreetMap, not GSHHG** (download approved by the
+user). GSHHG's full-resolution shoreline dates from 2017 and 1990s sources,
+and this coast has since gained Palm Jumeirah, the Dubai and Doha reclamations
+and new ports; its home server also refused connections on 2026-09-11.
+OpenStreetMap land polygons (osmdata.openstreetmap.de, ODbL, rebuilt daily)
+were downloaded once (925.7 MB). The 2,135 polygons touching 44.5-61.0 E,
+22.0-32.5 N, the union of every catalogued scene footprint, were extracted to a
+5.6 MB `.npz` (478,297 vertices) and the download deleted. Spot checks:
+Fujairah city and Deira read as land; open sea off Dubai, the open Gulf of Oman
+and the Fujairah anchorage as water; 2,391 coastline vertices fall inside Palm
+Jumeirah's box. Land and a seaward buffer are rasterised through the scene's
+control points and masked before CFAR, so land brightness no longer enters any
+clutter estimate either.
+
+Measured on a 20 km VH window over the Fujairah coast, city, port and inshore
+anchorage, on the same pass:
+
+| Mask | Candidates in box | Per 100 km2 searched |
+|---|---|---|
+| Interior polygons only (before) | 644 | 161.0 |
+| Coastline, no buffer | 87 | 40.4 |
+| Coastline, 150 m buffer (default) | 46 | 22.1 |
+| Coastline, 500 m buffer (plan value) | 32 | 16.2 |
+
+Without the mask, hundreds of candidates sat on the city and the Hajar
+foothills. With it, the offshore anchorage boxes are the same in all four
+previews; the buffers differ only near the shore. Of the 87 unbuffered
+candidates, 25 lie within 50 m of a coastline vertex, 47 within 150 m and 59
+within 500 m. At 150 m, candidates remain on curved breakwaters that
+OpenStreetMap draws as lines rather than land; 500 m removes them but also
+blinds the port approach. The default stays 150 m, provisional: structures that
+recur on every pass are better removed by a persistence mask from repeated
+passes (section 8) than by a buffer that wide. The buffer is a square dilation,
+so it reaches about 1.4 times as far along diagonals.

@@ -10,10 +10,11 @@ box, scene and polarisation; --no-store skips it.
 Run:
     uv run python scripts/detect_window.py --lon 56.75 --lat 25.25 --size-km 20
 
-Choose an offshore window for now. The coastline mask is still the
-conservative interior polygon set from Phase 1.5, which deliberately leaves
-the coastal strip unmasked, so shoreline inside the window will be reported
-as candidates until a proper coastline is added.
+Land and a seaward buffer are masked before CFAR using the OpenStreetMap
+coastline built by scripts/fetch_coastline.py. Without that file the run
+falls back to dropping candidates inside the conservative interior polygons
+from Phase 1.5, which leave the coastal strip unmasked, so shoreline would be
+reported as candidates.
 
 If CDSE rejects the credentials this process may not exit on its own: GDAL
 hangs in native teardown after a failed request on this host. Run
@@ -50,6 +51,17 @@ from core.db.session import (  # noqa: E402
 from core.db.spatial import BBox  # noqa: E402
 from core.sar.catalogue import SarProduct, search  # noqa: E402
 from core.sar.cfar import CfarConfig  # noqa: E402
+from core.sar.coastline import (  # noqa: E402
+    ATTRIBUTION as COASTLINE_ATTRIBUTION,
+)
+from core.sar.coastline import (  # noqa: E402
+    DEFAULT_BUFFER_M,
+    CoastlineMask,
+    load_land,
+)
+from core.sar.coastline import (  # noqa: E402
+    DEFAULT_PATH as COASTLINE_PATH,
+)
 from core.sar.detect import (  # noqa: E402
     CFAR_CONFIDENCE,
     Candidate,
@@ -115,6 +127,23 @@ def platform_mask(
         scene, window.width, window.height, window_offset=(window.row_off, window.col_off)
     )
     return raster, len(standing)
+
+
+def coastline_mask(
+    box: BBox, scene: SceneGeoref, window: PixelWindow, buffer_m: float
+) -> np.ndarray | None:
+    """Rasterise land and its seaward buffer, if the coastline file is present."""
+    if not COASTLINE_PATH.is_file():
+        return None
+    # Wide enough for the buffer and for a rotated window's corners beyond the box.
+    margin = 0.25 * max(box.max_lon - box.min_lon, box.max_lat - box.min_lat) + 0.02
+    nearby = BBox(
+        box.min_lon - margin, box.min_lat - margin, box.max_lon + margin, box.max_lat + margin
+    )
+    land = load_land(COASTLINE_PATH, bbox=nearby)
+    return CoastlineMask(land, buffer_m=buffer_m).rasterise(
+        scene, window.width, window.height, window_offset=(window.row_off, window.col_off)
+    )
 
 
 def display_stretch(pixels: np.ndarray) -> np.ndarray:
@@ -261,6 +290,15 @@ def main() -> int:
     parser.add_argument(
         "--no-store", action="store_true", help="do not write detections to the database"
     )
+    parser.add_argument(
+        "--coast-buffer-m",
+        type=float,
+        default=DEFAULT_BUFFER_M,
+        help="seaward buffer masked around land",
+    )
+    parser.add_argument(
+        "--no-coastline", action="store_true", help="skip the coastline mask, for comparison"
+    )
     args = parser.parse_args()
     if not 0 < args.size_km <= MAX_SIZE_KM:
         parser.error(f"--size-km must be in (0, {MAX_SIZE_KM}]")
@@ -294,11 +332,20 @@ def main() -> int:
     )
 
     infra, standing = platform_mask(box, product.acq_start.date(), scene, window)
+    coast = None if args.no_coastline else coastline_mask(box, scene, window, args.coast_buffer_m)
     nodata = pixels == 0
-    masked = nodata if infra is None else (nodata | infra)
+    masked = nodata.copy()
+    for layer in (infra, coast):
+        if layer is not None:
+            masked |= layer
+    coast_text = (
+        f"coastline {int(coast.sum())} px (buffer {args.coast_buffer_m:g} m)"
+        if coast is not None
+        else "no coastline mask, interior polygons only"
+    )
     print(
         f"masking  : {standing} standing platforms, {infra.sum() if infra is not None else 0} px; "
-        f"nodata {int(nodata.sum())} px"
+        f"{coast_text}; nodata {int(nodata.sum())} px"
     )
 
     config = CfarConfig(pfa=args.pfa, satellite=product.satellite)
@@ -308,8 +355,11 @@ def main() -> int:
     located = georeference(candidates, scene, window_offset=(window.row_off, window.col_off))
     detect_s = time.perf_counter() - started
 
-    land = PolygonLandMask()
-    offshore = [c for c in located if not land.is_land(c.lon, c.lat)]
+    if coast is None:
+        land = PolygonLandMask()
+        offshore = [c for c in located if not land.is_land(c.lon, c.lat)]
+    else:
+        offshore = located  # land was masked before CFAR
     # On a rotated scene the pixel window is a little larger than the box. Keep
     # only detections inside the box, so every output covers exactly the area
     # asked for and a re-run replaces its stored rows instead of adding to them.
@@ -339,6 +389,8 @@ def main() -> int:
         print(f"database : {written} detections stored ({args.pol.upper()}, {version})")
     if infra is not None:
         print(PLATFORM_ATTRIBUTION)
+    if coast is not None:
+        print(COASTLINE_ATTRIBUTION)
     return 0
 
 

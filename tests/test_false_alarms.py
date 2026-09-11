@@ -14,34 +14,10 @@ import numpy as np
 import pytest
 
 from core.sar.cfar import CfarConfig, cfar_detect
-from core.sar.false_alarms import PfaMeasurement, dilate, measure_clutter_false_alarms
+from core.sar.false_alarms import PfaMeasurement, measure_clutter_false_alarms
 from core.sar.synthetic import make_scene, ship_grid
 
 SHAPE = (1200, 1200)
-
-
-def test_dilation_grows_a_pixel_into_a_square():
-    mask = np.zeros((11, 11), dtype=bool)
-    mask[5, 5] = True
-
-    grown = dilate(mask, 2)
-
-    assert grown.sum() == 25
-    assert grown[3:8, 3:8].all()
-
-
-def test_dilation_is_clipped_at_the_image_edge():
-    mask = np.zeros((6, 6), dtype=bool)
-    mask[0, 0] = True
-
-    assert dilate(mask, 1).sum() == 4
-
-
-def test_zero_radius_dilation_changes_nothing():
-    mask = np.zeros((5, 5), dtype=bool)
-    mask[2, 3] = True
-
-    assert np.array_equal(dilate(mask, 0), mask)
 
 
 def test_measured_rate_matches_the_request_on_ideal_clutter():

@@ -31,6 +31,7 @@ import numpy as np
 
 from core.sar.cfar import CfarConfig, cfar_detect
 from core.sar.detect import _binary_opening, detect_candidates
+from core.sar.morphology import dilate
 
 # From loose to beyond the operating point. Loose settings give enough hits to
 # measure a rate precisely; strict ones show behaviour at the operating point.
@@ -63,24 +64,6 @@ class PfaMeasurement:
     def excess(self) -> float:
         """How many times the requested rate the clutter actually produced."""
         return self.measured_pfa / self.requested_pfa
-
-
-def dilate(mask: np.ndarray, radius: int) -> np.ndarray:
-    """Grow a mask by ``radius`` pixels in a square, using a summed-area table."""
-    if radius <= 0:
-        return mask.copy()
-    size = 2 * radius + 1
-    rows, cols = mask.shape
-    padded = np.pad(mask.astype(np.int32), radius)
-    integral = np.zeros((rows + 2 * radius + 1, cols + 2 * radius + 1), dtype=np.int64)
-    integral[1:, 1:] = padded.cumsum(axis=0).cumsum(axis=1)
-    counts = (
-        integral[size : size + rows, size : size + cols]
-        - integral[:rows, size : size + cols]
-        - integral[size : size + rows, :cols]
-        + integral[:rows, :cols]
-    )
-    return counts > 0
 
 
 def measure_clutter_false_alarms(
