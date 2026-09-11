@@ -25,6 +25,8 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from core.config import load_settings
 from core.db.repository import (
+    DetectionRepository,
+    DetectionView,
     PositionRepository,
     SceneRepository,
     VesselFix,
@@ -109,11 +111,13 @@ async def health() -> dict[str, Any]:
         vessels = VesselRepository(session).count()
         positions = PositionRepository(session).count()
         scenes_known = SceneRepository(session).count()
+        detections_stored = DetectionRepository(session).count()
     return {
         "status": "ok",
         "vessels": vessels,
         "positions": positions,
         "sar_scenes": scenes_known,
+        "detections": detections_stored,
         "live_feeds": settings.describe_feeds() if settings else [],
         # Surfaced so the UI can warn when it is showing seeded, not live, data.
         "has_live_ais": bool(settings and settings.has_live_ais),
@@ -247,6 +251,60 @@ async def scenes(
         "satellites": sorted({s["satellite"] for s in payload}),
         "attribution": "Contains modified Copernicus Sentinel data",
     }
+
+
+@app.get("/api/detections")
+async def detections(
+    bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
+    days: int = Query(default=14, ge=1, le=365),
+    limit: int = Query(default=20_000, ge=1, le=100_000),
+) -> dict[str, Any]:
+    """Radar detections from recent passes, newest pass first.
+
+    Each carries the age of the pass that saw it. A detection is a snapshot of
+    one moment, hours or days old, and the UI must never draw it as a live
+    contact.
+    """
+    box = _parse_bbox(bbox)
+    now = dt.datetime.now(dt.UTC)
+    since = now - dt.timedelta(days=days)
+    with session_scope(_sessions()) as session:
+        found = DetectionRepository(session).in_bbox(box, since=since, limit=limit)
+    return {
+        "generated_at": now.isoformat(),
+        "bbox": _bbox_json(box),
+        "count": len(found),
+        "detections": [_detection_to_json(d, now) for d in found],
+        "attribution": "Contains modified Copernicus Sentinel data",
+    }
+
+
+def _detection_to_json(detection: DetectionView, now: dt.datetime) -> dict[str, Any]:
+    return {
+        "id": detection.id,
+        "scene_id": detection.scene_id,
+        "lon": round(detection.lon, 6),
+        "lat": round(detection.lat, 6),
+        "acq_time": detection.acq_time.isoformat(),
+        # Explicit, so a detection from an old pass can never look current.
+        "age_hours": round(detection.age_seconds(now) / 3600, 2),
+        "satellite": detection.satellite,
+        "polarisation": detection.polarisation,
+        "length_m": _rounded(detection.length_m),
+        "width_m": _rounded(detection.width_m),
+        # Modulo 180: radar cannot tell bow from stern.
+        "heading_deg": _rounded(detection.heading_deg),
+        "confidence": detection.confidence,
+        "detector": detection.detector,
+        "detector_version": detection.detector_version,
+        "pixel_count": detection.pixel_count,
+        "peak_dn": _rounded(detection.peak_dn),
+        "product_name": detection.product_name,
+    }
+
+
+def _rounded(value: float | None, digits: int = 1) -> float | None:
+    return None if value is None else round(value, digits)
 
 
 def _utc(value: dt.datetime) -> dt.datetime:

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import datetime as dt
+from dataclasses import dataclass
 from pathlib import Path
 
 import pytest
@@ -12,7 +13,7 @@ from core.ais.messages import AisPositionReport, VesselStatic
 from core.config import Settings
 from core.db.repository import PositionRepository, VesselRepository
 from core.db.session import create_all, create_db_engine, make_session_factory, session_scope
-from core.db.spatial import GULF_BBOX, HORMUZ_BBOX
+from core.db.spatial import GULF_BBOX, HORMUZ_BBOX, BBox
 from services.api import main as api
 
 MMSI = 422123456
@@ -267,3 +268,88 @@ def test_health_reports_known_scene_count(client):
     _seed_scene(api._state["sessions"])
 
     assert client.get("/api/health").json()["sar_scenes"] == 1
+
+
+# --------------------------------------------------------------------------
+# SAR detections
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class _Target:
+    """Shaped like core.sar.detect.Candidate."""
+
+    lon: float
+    lat: float
+    length_m: float = 212.0
+    width_m: float = 63.0
+    heading_deg: float = 127.0
+    pixel_count: int = 180
+    peak_amplitude: float = 2911.0
+
+
+def _seed_detection(factory, lon=56.5, lat=26.5, hours_ago=3):
+    from core.db.repository import DetectionRepository, SceneRepository
+
+    product_id = f"det-{hours_ago}"
+    _seed_scene(factory, product_id=product_id, hours_ago=hours_ago)
+    with session_scope(factory) as session:
+        scene_id = SceneRepository(session).id_for(product_id)
+        DetectionRepository(session).replace_in_bbox(
+            scene_id,
+            BBox(lon - 0.1, lat - 0.1, lon + 0.1, lat + 0.1),
+            [_Target(lon, lat)],
+            polarisation="VH",
+            detector="cfar",
+            detector_version="test",
+            confidence=1.0,
+        )
+
+
+def test_detections_endpoint_returns_radar_contacts(client):
+    _seed_detection(api._state["sessions"])
+
+    body = client.get("/api/detections").json()
+
+    assert body["count"] == 1
+    detection = body["detections"][0]
+    assert (detection["lon"], detection["lat"]) == (56.5, 26.5)
+    assert detection["length_m"] == 212.0
+    assert detection["satellite"] == "S1D"
+    assert detection["polarisation"] == "VH"
+    assert detection["detector"] == "cfar"
+    assert body["attribution"].startswith("Contains modified Copernicus")
+
+
+def test_every_detection_carries_the_age_of_its_radar_pass(client):
+    """A detection is a snapshot from the last pass; it must never look live."""
+    _seed_detection(api._state["sessions"], hours_ago=5)
+
+    detection = client.get("/api/detections").json()["detections"][0]
+
+    assert 4.5 < detection["age_hours"] < 5.5
+    assert detection["acq_time"].endswith("+00:00")
+
+
+def test_detections_outside_the_bbox_are_excluded(client):
+    _seed_detection(api._state["sessions"])
+
+    body = client.get("/api/detections", params={"bbox": "0,50,5,55"}).json()
+
+    assert body["count"] == 0
+
+
+def test_detections_from_passes_older_than_the_window_are_excluded(client):
+    _seed_detection(api._state["sessions"], hours_ago=24 * 20)
+
+    assert client.get("/api/detections", params={"days": 14}).json()["count"] == 0
+
+
+def test_detection_days_is_bounded(client):
+    assert client.get("/api/detections", params={"days": 0}).status_code == 422
+
+
+def test_health_reports_detection_count(client):
+    _seed_detection(api._state["sessions"])
+
+    assert client.get("/api/health").json()["detections"] == 1

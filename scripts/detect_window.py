@@ -2,8 +2,10 @@
 
 The first end-to-end run of the Phase 3 detector on real imagery: catalogue
 -> object storage -> ground-control-point georeferencing -> platform mask ->
-CFAR -> vessel candidates. Results are printed as a table and written as a
-GeoJSON file plus an annotated PNG for checking by eye.
+CFAR -> vessel candidates. Results are printed as a table, written as a
+GeoJSON file plus an annotated PNG for checking by eye, and stored in the
+database for the API and map. Storing replaces any earlier run over the same
+box, scene and polarisation; --no-store skips it.
 
 Run:
     uv run python scripts/detect_window.py --lon 56.75 --lat 25.25 --size-km 20
@@ -38,10 +40,23 @@ import numpy as np  # noqa: E402
 
 from core.ais.landmask import PolygonLandMask, point_in_polygon  # noqa: E402
 from core.config import load_settings  # noqa: E402
+from core.db.repository import DetectionRepository, SceneRepository  # noqa: E402
+from core.db.session import (  # noqa: E402
+    create_all,
+    create_db_engine,
+    make_session_factory,
+    session_scope,
+)
 from core.db.spatial import BBox  # noqa: E402
 from core.sar.catalogue import SarProduct, search  # noqa: E402
 from core.sar.cfar import CfarConfig  # noqa: E402
-from core.sar.detect import Candidate, detect_candidates, georeference  # noqa: E402
+from core.sar.detect import (  # noqa: E402
+    CFAR_CONFIDENCE,
+    Candidate,
+    detect_candidates,
+    detector_version,
+    georeference,
+)
 from core.sar.georef import SceneGeoref  # noqa: E402
 from core.sar.infrastructure import (  # noqa: E402
     ATTRIBUTION as PLATFORM_ATTRIBUTION,
@@ -163,7 +178,9 @@ def write_png(path: Path, rgb: np.ndarray) -> None:
             out.write(rgb)
 
 
-def write_geojson(path: Path, product: SarProduct, detections: list[Candidate]) -> None:
+def write_geojson(
+    path: Path, product: SarProduct, detections: list[Candidate], version: str
+) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     features = [
         {
@@ -185,11 +202,41 @@ def write_geojson(path: Path, product: SarProduct, detections: list[Candidate]) 
         "properties": {
             "product": product.name,
             "acquired": product.acq_start.isoformat(),
+            "detector_version": version,
             "attribution": "Contains modified Copernicus Sentinel data",
         },
         "features": features,
     }
     path.write_text(json.dumps(collection, indent=1), encoding="utf-8")
+
+
+def store_detections(
+    database_url: str | None,
+    product: SarProduct,
+    box: BBox,
+    detections: list[Candidate],
+    polarisation: str,
+    version: str,
+) -> int:
+    """Record the scene, then replace this box's detections from it."""
+    engine = create_db_engine(database_url)
+    create_all(engine)
+    with session_scope(make_session_factory(engine)) as session:
+        scenes = SceneRepository(session)
+        scenes.upsert(product, status="discovered" if product.online else "offline")
+        session.flush()
+        scene_id = scenes.id_for(product.product_id)
+        if scene_id is None:
+            raise RuntimeError(f"scene {product.product_id} was not recorded")
+        return DetectionRepository(session).replace_in_bbox(
+            scene_id,
+            box,
+            detections,
+            polarisation=polarisation.upper(),
+            detector="cfar",
+            detector_version=version,
+            confidence=CFAR_CONFIDENCE,
+        )
 
 
 def print_table(detections: list[Candidate], limit: int = 25) -> None:
@@ -211,11 +258,14 @@ def main() -> int:
     parser.add_argument("--days", type=int, default=10, help="catalogue lookback")
     parser.add_argument("--pol", choices=("vv", "vh"), default="vh")
     parser.add_argument("--pfa", type=float, default=1e-6)
+    parser.add_argument(
+        "--no-store", action="store_true", help="do not write detections to the database"
+    )
     args = parser.parse_args()
     if not 0 < args.size_km <= MAX_SIZE_KM:
         parser.error(f"--size-km must be in (0, {MAX_SIZE_KM}]")
 
-    load_settings()
+    settings = load_settings()
     box = box_around(args.lon, args.lat, args.size_km)
     product = latest_product_covering(args.lon, args.lat, box, args.days)
     if product is None:
@@ -252,6 +302,7 @@ def main() -> int:
     )
 
     config = CfarConfig(pfa=args.pfa, satellite=product.satellite)
+    version = detector_version(config)
     started = time.perf_counter()
     candidates = detect_candidates(pixels, config=config, mask=masked)
     located = georeference(candidates, scene, window_offset=(window.row_off, window.col_off))
@@ -259,23 +310,33 @@ def main() -> int:
 
     land = PolygonLandMask()
     offshore = [c for c in located if not land.is_land(c.lon, c.lat)]
-    area_km2 = (window.width * 10.0 / 1000.0) * (window.height * 10.0 / 1000.0)
+    # On a rotated scene the pixel window is a little larger than the box. Keep
+    # only detections inside the box, so every output covers exactly the area
+    # asked for and a re-run replaces its stored rows instead of adding to them.
+    found = [c for c in offshore if box.contains(c.lon, c.lat)]
+    # Nodata and masked platforms were never searched. Their share of the box
+    # is estimated from their share of the window.
+    searched_km2 = args.size_km**2 * float(np.mean(~masked))
     print(
         f"detector : CFAR Pfa {args.pfa:g} (alpha {config.alpha:.2f}) in {detect_s:.1f}s -> "
-        f"{len(offshore)} candidates offshore ({len(located) - len(offshore)} inland dropped), "
-        f"{len(offshore) / max(area_km2, 1e-6) * 100:.1f} per 100 km2"
+        f"{len(found)} candidates in the box ({len(located) - len(offshore)} inland dropped, "
+        f"{len(offshore) - len(found)} outside the box), "
+        f"{len(found) / max(searched_km2, 1e-6) * 100:.1f} per 100 km2 searched"
     )
     print()
-    print_table(offshore)
+    print_table(found)
 
     stem = f"{product.name.removesuffix('.SAFE')}_{args.pol}_{args.lat:.3f}_{args.lon:.3f}"
     png = QUICKLOOK_DIR / f"{stem}.png"
     geojson = DETECTION_DIR / f"{stem}.geojson"
-    write_png(png, render_preview(pixels, offshore, window, masked))
-    write_geojson(geojson, product, offshore)
+    write_png(png, render_preview(pixels, found, window, masked))
+    write_geojson(geojson, product, found, version)
     print()
     print(f"preview  : {png}")
     print(f"geojson  : {geojson}")
+    if not args.no_store:
+        written = store_detections(settings.database_url, product, box, found, args.pol, version)
+        print(f"database : {written} detections stored ({args.pol.upper()}, {version})")
     if infra is not None:
         print(PLATFORM_ATTRIBUTION)
     return 0

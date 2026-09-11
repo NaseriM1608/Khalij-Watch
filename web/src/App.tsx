@@ -15,7 +15,10 @@ import {
   CLASS_COLOURS,
   CLASS_LABELS,
   CoarseClass,
+  DetectionsResponse,
   Health,
+  RADAR_COLOUR,
+  SarDetection,
   ScenesResponse,
   Track,
   Vessel,
@@ -26,6 +29,11 @@ import {
 } from "./api";
 
 const REFRESH_MS = 5000;
+// Detections change only when a detection job runs, so poll gently.
+const RADAR_REFRESH_MS = 60_000;
+const RADAR_LOOKBACK_DAYS = 14;
+// A stable empty list, so hiding the layer does not re-render the map each tick.
+const NO_DETECTIONS: SarDetection[] = [];
 const ALL_CLASSES: (CoarseClass | "unknown")[] = [
   "cargo_tanker",
   "fishing",
@@ -48,6 +56,9 @@ export default function App() {
   const [suspectOnly, setSuspectOnly] = useState(false);
   const [coverage, setCoverage] = useState<ScenesResponse | null>(null);
   const [showCoverage, setShowCoverage] = useState(true);
+  const [radar, setRadar] = useState<DetectionsResponse | null>(null);
+  const [radarError, setRadarError] = useState<string | null>(null);
+  const [showRadar, setShowRadar] = useState(true);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
@@ -56,6 +67,26 @@ export default function App() {
       .then((r) => setAoi(r.gulf))
       .catch(() => undefined);
     api.scenes(14).then(setCoverage).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await api.detections(RADAR_LOOKBACK_DAYS);
+        if (cancelled) return;
+        setRadar(response);
+        setRadarError(null);
+      } catch (err) {
+        if (!cancelled) setRadarError((err as Error).message);
+      }
+    };
+    load();
+    const timer = setInterval(load, RADAR_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
@@ -204,6 +235,30 @@ export default function App() {
         </section>
 
         <section className="panel">
+          <h2>Radar detections</h2>
+          <p className="hint">
+            Rings are objects the radar saw, whether or not they broadcast
+            anything. Each is a snapshot from one pass, not a live position,
+            and none has been matched against AIS yet.
+          </p>
+          <label className="legend">
+            <span className="suspect-row">
+              <input
+                type="checkbox"
+                checked={showRadar}
+                onChange={() => setShowRadar((v) => !v)}
+              />
+              <span className="ring" style={{ borderColor: RADAR_COLOUR }} />
+              <span className="legend-label">
+                Show last {RADAR_LOOKBACK_DAYS} days
+              </span>
+              <span className="legend-count">{radar?.count ?? 0}</span>
+            </span>
+          </label>
+          {radarError && <p className="error">{radarError}</p>}
+        </section>
+
+        <section className="panel">
           <h2>Vessel classes</h2>
           <p className="hint">
             Class comes from AIS, not from imagery. Radar cannot tell a tanker
@@ -274,6 +329,10 @@ export default function App() {
               <dd>{health?.sar_scenes.toLocaleString() ?? "—"}</dd>
             </div>
             <div>
+              <dt>Radar detections</dt>
+              <dd>{health?.detections.toLocaleString() ?? "—"}</dd>
+            </div>
+            <div>
               <dt>Live feeds</dt>
               <dd>{health?.live_feeds.length ? health.live_feeds.join(", ") : "none"}</dd>
             </div>
@@ -292,6 +351,9 @@ export default function App() {
         <VesselMap
           vessels={visible}
           scenes={showCoverage ? (coverage?.scenes ?? []) : []}
+          detections={
+            showRadar ? (radar?.detections ?? NO_DETECTIONS) : NO_DETECTIONS
+          }
           track={track?.points ?? null}
           selected={selected}
           aoi={aoi}

@@ -7,18 +7,25 @@
  *
  * Opacity encodes age. A contact that has not reported in hours must not look
  * as solid as one reporting now.
+ *
+ * Radar detections are hollow rings. A filled symbol means someone told us a
+ * vessel is there; a ring means the radar saw something there. That
+ * distinction is the point of the product, so the two never share a style.
  */
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   BBox,
   CLASS_COLOURS,
+  RADAR_COLOUR,
+  SarDetection,
   SarScene,
   Vessel,
   classOf,
   coverageColour,
+  formatAge,
 } from "./api";
 
 // CARTO's dark basemap needs no API key and suits an operational console.
@@ -28,10 +35,14 @@ const BASEMAP =
 const VESSEL_SOURCE = "vessels";
 const TRACK_SOURCE = "track";
 const SCENE_SOURCE = "scenes";
+const DETECTION_SOURCE = "detections";
+const VESSEL_LAYERS = ["vessel-arrows", "vessel-dots"];
+const DETECTION_LAYER = "detection-rings";
 
 interface Props {
   vessels: Vessel[];
   scenes: SarScene[];
+  detections: SarDetection[];
   track: { lon: number; lat: number }[] | null;
   selected: number | null;
   aoi: BBox | null;
@@ -59,6 +70,42 @@ function toFeatureCollection(vessels: Vessel[]): GeoJSON.FeatureCollection {
   };
 }
 
+function toDetectionFeatures(
+  detections: SarDetection[],
+): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: detections.map((detection) => ({
+      type: "Feature",
+      geometry: { type: "Point", coordinates: [detection.lon, detection.lat] },
+      // Display strings are prepared here so the popup never has to
+      // interpret missing values.
+      properties: {
+        id: detection.id,
+        ageHours: detection.age_hours,
+        pass: [detection.satellite, detection.polarisation]
+          .filter(Boolean)
+          .join(" · "),
+        size:
+          detection.length_m != null && detection.width_m != null
+            ? `${Math.round(detection.length_m)} × ${Math.round(detection.width_m)} m`
+            : "not measured",
+        heading: headingLabel(detection.heading_deg),
+        detector: [detection.detector, detection.detector_version]
+          .filter(Boolean)
+          .join(" "),
+      },
+    })),
+  };
+}
+
+/** Radar cannot tell bow from stern, so both directions are stated. */
+function headingLabel(headingDeg: number | null): string {
+  if (headingDeg == null) return "not measured";
+  const axis = Math.round(headingDeg) % 180;
+  return `${axis}° or ${axis + 180}°`;
+}
+
 function bboxToPolygon(bbox: BBox): GeoJSON.Feature {
   const { min_lon, min_lat, max_lon, max_lat } = bbox;
   return {
@@ -82,6 +129,7 @@ function bboxToPolygon(bbox: BBox): GeoJSON.Feature {
 export function VesselMap({
   vessels,
   scenes,
+  detections,
   track,
   selected,
   aoi,
@@ -89,7 +137,9 @@ export function VesselMap({
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
-  const ready = useRef(false);
+  // State rather than a ref: data that arrives before the style has loaded
+  // must still reach the map once it has, so every data effect depends on it.
+  const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
     if (!container.current || map.current) return;
@@ -109,22 +159,18 @@ export function VesselMap({
     instance.addControl(new maplibregl.ScaleControl({ unit: "nautical" }));
 
     instance.on("load", () => {
-      instance.addSource(VESSEL_SOURCE, {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-      });
-      instance.addSource(TRACK_SOURCE, {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-      });
-      instance.addSource(SCENE_SOURCE, {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-      });
-      instance.addSource("aoi", {
-        type: "geojson",
-        data: { type: "FeatureCollection", features: [] },
-      });
+      for (const id of [
+        VESSEL_SOURCE,
+        TRACK_SOURCE,
+        SCENE_SOURCE,
+        DETECTION_SOURCE,
+        "aoi",
+      ]) {
+        instance.addSource(id, {
+          type: "geojson",
+          data: { type: "FeatureCollection", features: [] },
+        });
+      }
 
       // Radar coverage sits at the very bottom: it is context for everything
       // above it, and shows WHERE the platform can see at all.
@@ -164,6 +210,29 @@ export function VesselMap({
           "line-color": "#ffffff",
           "line-width": 1.6,
           "line-opacity": 0.55,
+        },
+      });
+
+      // Radar detections: above coverage, below AIS symbols, so a vessel that
+      // is both reported and seen shows its symbol inside a ring.
+      instance.addLayer({
+        id: DETECTION_LAYER,
+        type: "circle",
+        source: DETECTION_SOURCE,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 3.5, 12, 10],
+          "circle-color": "transparent",
+          "circle-stroke-width": [
+            "interpolate",
+            ["linear"],
+            ["zoom"],
+            5,
+            1,
+            12,
+            1.8,
+          ],
+          "circle-stroke-color": RADAR_COLOUR,
+          "circle-stroke-opacity": passAgeOpacity(),
         },
       });
 
@@ -231,16 +300,25 @@ export function VesselMap({
       });
 
       addArrowIcons(instance);
-      ready.current = true;
+      setLoaded(true);
 
+      // A reported vessel takes precedence; otherwise explain the radar ring.
       const pick = (event: maplibregl.MapMouseEvent) => {
         const hits = instance.queryRenderedFeatures(event.point, {
-          layers: ["vessel-arrows", "vessel-dots"],
+          layers: VESSEL_LAYERS,
         });
-        onSelect(hits.length ? (hits[0].properties?.mmsi as number) : null);
+        if (hits.length) {
+          onSelect(hits[0].properties?.mmsi as number);
+          return;
+        }
+        onSelect(null);
+        const seen = instance.queryRenderedFeatures(event.point, {
+          layers: [DETECTION_LAYER],
+        });
+        if (seen.length) showDetectionPopup(instance, seen[0]);
       };
       instance.on("click", pick);
-      for (const layer of ["vessel-arrows", "vessel-dots"]) {
+      for (const layer of [...VESSEL_LAYERS, DETECTION_LAYER]) {
         instance.on("mouseenter", layer, () => {
           instance.getCanvas().style.cursor = "pointer";
         });
@@ -254,20 +332,20 @@ export function VesselMap({
     return () => {
       instance.remove();
       map.current = null;
-      ready.current = false;
+      setLoaded(false);
     };
   }, [onSelect]);
 
   useEffect(() => {
     const instance = map.current;
-    if (!instance || !ready.current) return;
+    if (!instance || !loaded) return;
     const source = instance.getSource(VESSEL_SOURCE) as maplibregl.GeoJSONSource;
     source?.setData(toFeatureCollection(vessels));
-  }, [vessels]);
+  }, [vessels, loaded]);
 
   useEffect(() => {
     const instance = map.current;
-    if (!instance || !ready.current) return;
+    if (!instance || !loaded) return;
     const source = instance.getSource(SCENE_SOURCE) as maplibregl.GeoJSONSource;
     source?.setData({
       type: "FeatureCollection",
@@ -283,11 +361,20 @@ export function VesselMap({
           geometry: { type: "Polygon", coordinates: [scene.footprint] },
         })),
     });
-  }, [scenes]);
+  }, [scenes, loaded]);
 
   useEffect(() => {
     const instance = map.current;
-    if (!instance || !ready.current) return;
+    if (!instance || !loaded) return;
+    const source = instance.getSource(
+      DETECTION_SOURCE,
+    ) as maplibregl.GeoJSONSource;
+    source?.setData(toDetectionFeatures(detections));
+  }, [detections, loaded]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !loaded) return;
     const source = instance.getSource(TRACK_SOURCE) as maplibregl.GeoJSONSource;
     source?.setData(
       track && track.length > 1
@@ -301,24 +388,24 @@ export function VesselMap({
           }
         : { type: "FeatureCollection", features: [] },
     );
-  }, [track]);
+  }, [track, loaded]);
 
   useEffect(() => {
     const instance = map.current;
-    if (!instance || !ready.current) return;
+    if (!instance || !loaded) return;
     instance.setFilter("vessel-selected", [
       "==",
       ["get", "mmsi"],
       selected ?? -1,
     ]);
-  }, [selected]);
+  }, [selected, loaded]);
 
   useEffect(() => {
     const instance = map.current;
-    if (!instance || !ready.current || !aoi) return;
+    if (!instance || !loaded || !aoi) return;
     const source = instance.getSource("aoi") as maplibregl.GeoJSONSource;
     source?.setData(bboxToPolygon(aoi));
-  }, [aoi]);
+  }, [aoi, loaded]);
 
   return <div ref={container} className="map" />;
 }
@@ -341,6 +428,68 @@ function ageOpacity(): maplibregl.ExpressionSpecification {
     24 * 3600,
     0.25,
   ];
+}
+
+/**
+ * Fade a radar detection with the age of its pass. Radar ages in days, not
+ * minutes: a ring stays legible for the few days until the next pass.
+ */
+function passAgeOpacity(): maplibregl.ExpressionSpecification {
+  return [
+    "interpolate",
+    ["linear"],
+    ["get", "ageHours"],
+    0,
+    1.0,
+    12,
+    0.9,
+    48,
+    0.65,
+    120,
+    0.4,
+    336,
+    0.2,
+  ];
+}
+
+/** Explain a radar ring: when it was seen, by what, and what it is not. */
+function showDetectionPopup(
+  instance: MapLibreMap,
+  feature: maplibregl.MapGeoJSONFeature,
+): void {
+  const properties = feature.properties ?? {};
+  const coordinates = (feature.geometry as GeoJSON.Point).coordinates;
+  const rows: [string, string][] = [
+    ["Seen", formatAge(Number(properties.ageHours) * 3600)],
+    ["Pass", String(properties.pass ?? "")],
+    ["Size", String(properties.size ?? "")],
+    ["Heading", String(properties.heading ?? "")],
+    ["Detector", String(properties.detector ?? "")],
+  ];
+
+  // Built from DOM nodes with textContent, never from an HTML string.
+  const root = document.createElement("div");
+  root.className = "radar-popup";
+  const title = document.createElement("strong");
+  title.textContent = "Radar detection";
+  root.append(title);
+  for (const [label, value] of rows) {
+    const row = document.createElement("div");
+    const name = document.createElement("span");
+    name.textContent = label;
+    const text = document.createElement("span");
+    text.textContent = value;
+    row.append(name, text);
+    root.append(row);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Not yet matched against AIS.";
+  root.append(note);
+
+  new maplibregl.Popup({ maxWidth: "280px" })
+    .setLngLat([coordinates[0], coordinates[1]])
+    .setDOMContent(root)
+    .addTo(instance);
 }
 
 /**

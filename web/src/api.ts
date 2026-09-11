@@ -84,11 +84,42 @@ export interface ScenesResponse {
   attribution: string;
 }
 
+/** Something the radar saw. It says nothing about identity or AIS status. */
+export interface SarDetection {
+  id: number;
+  scene_id: number;
+  lon: number;
+  lat: number;
+  acq_time: string;
+  /** Hours since the pass that saw it. A detection is never a live position. */
+  age_hours: number;
+  satellite: string;
+  polarisation: string | null;
+  length_m: number | null;
+  width_m: number | null;
+  /** Modulo 180: radar cannot tell bow from stern. */
+  heading_deg: number | null;
+  confidence: number;
+  detector: string;
+  detector_version: string | null;
+  pixel_count: number | null;
+  peak_dn: number | null;
+  product_name: string;
+}
+
+export interface DetectionsResponse {
+  generated_at: string;
+  count: number;
+  detections: SarDetection[];
+  attribution: string;
+}
+
 export interface Health {
   status: string;
   vessels: number;
   positions: number;
   sar_scenes: number;
+  detections: number;
   live_feeds: string[];
   has_live_ais: boolean;
 }
@@ -138,7 +169,12 @@ export const api = {
   track: (mmsi: number, hours = 24) =>
     getJson<Track>(`/api/vessels/${mmsi}/track?hours=${hours}`),
   scenes: (days = 14) => getJson<ScenesResponse>(`/api/scenes?days=${days}`),
+  detections: (days = 14) =>
+    getJson<DetectionsResponse>(`/api/detections?days=${days}`),
 };
+
+/** Radar detections share one colour: what matters is that radar saw them. */
+export const RADAR_COLOUR = "#ffd84a";
 
 /** Colour a radar footprint by how long ago it was acquired. */
 export function coverageColour(ageHours: number): string {

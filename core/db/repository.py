@@ -9,16 +9,18 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from typing import Protocol
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, insert, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from core.ais.messages import AisPositionReport, VesselStatic, coarse_class
 from core.ais.plausibility import ScoredPosition
-from core.db.models import AisPosition, SarScene, Vessel
+from core.db.models import AisPosition, Detection, SarScene, Vessel
 from core.db.spatial import BBox, bbox_filter_sql, bbox_params
 
 # Positions are written in batches; a per-message round trip cannot keep up
@@ -65,6 +67,17 @@ def _bind_timestamp(session: Session, value: dt.datetime) -> object:
     if session.get_bind().dialect.name == "sqlite":
         return utc.replace(tzinfo=None).strftime(_SQLITE_DATETIME_FORMAT)
     return utc
+
+
+def _row_timestamp(value: object) -> dt.datetime:
+    """Read a timestamp from a raw-SQL row.
+
+    SQLite has no native timestamptz: values come back as naive text that is
+    UTC by construction.
+    """
+    if isinstance(value, str):
+        value = dt.datetime.fromisoformat(value)
+    return _as_utc(value)
 
 
 # A contact older than this is stale for live-map purposes. It is still shown,
@@ -275,17 +288,11 @@ def _position_row(entry: AisPositionReport | ScoredPosition) -> dict:
 
 
 def _to_fix(row) -> VesselFix:
-    ts = row["ts"]
-    if isinstance(ts, str):
-        ts = dt.datetime.fromisoformat(ts)
-    if ts.tzinfo is None:
-        # SQLite has no native timestamptz; values return naive but are UTC.
-        ts = ts.replace(tzinfo=dt.UTC)
     return VesselFix(
         mmsi=row["mmsi"],
         lon=row["lon"],
         lat=row["lat"],
-        ts=ts,
+        ts=_row_timestamp(row["ts"]),
         sog_kn=row["sog_kn"],
         cog_deg=row["cog_deg"],
         heading_deg=row["heading_deg"],
@@ -356,6 +363,12 @@ class SceneRepository:
     def count(self) -> int:
         return self._session.execute(select(func.count()).select_from(SarScene)).scalar_one()
 
+    def id_for(self, product_id: str) -> int | None:
+        """The database id of a catalogued product, for linking its detections."""
+        return self._session.execute(
+            select(SarScene.id).where(SarScene.product_id == product_id)
+        ).scalar_one_or_none()
+
     def intersecting(
         self,
         bbox: BBox,
@@ -399,3 +412,178 @@ def _ring_to_wkt(ring: list[tuple[float, float]]) -> str | None:
         return None
     points = ", ".join(f"{lon} {lat}" for lon, lat in ring)
     return f"POLYGON(({points}))"
+
+
+class MeasuredTarget(Protocol):
+    """What a detector must report for a detection to be stored.
+
+    ``core.sar.detect.Candidate`` satisfies this once georeferenced. It is
+    declared structurally so the API, which never runs a detector, does not
+    have to import numpy.
+    """
+
+    lon: float | None
+    lat: float | None
+    length_m: float
+    width_m: float
+    heading_deg: float
+    pixel_count: int
+    peak_amplitude: float
+
+
+@dataclass(frozen=True)
+class DetectionView:
+    """A stored detection joined to the radar pass that produced it."""
+
+    id: int
+    scene_id: int
+    lon: float
+    lat: float
+    length_m: float | None
+    width_m: float | None
+    heading_deg: float | None
+    confidence: float
+    detector: str
+    detector_version: str | None
+    polarisation: str | None
+    pixel_count: int | None
+    peak_dn: float | None
+    acq_time: dt.datetime
+    satellite: str
+    product_name: str
+
+    def age_seconds(self, now: dt.datetime) -> float:
+        """Age of the observation: the age of the pass, not of the row."""
+        return max(0.0, (now - self.acq_time).total_seconds())
+
+
+class DetectionRepository:
+    """Vessel detections found in SAR scenes."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def replace_in_bbox(
+        self,
+        scene_id: int,
+        bbox: BBox,
+        targets: Sequence[MeasuredTarget],
+        *,
+        polarisation: str,
+        detector: str,
+        detector_version: str | None,
+        confidence: float,
+    ) -> int:
+        """Store one window's detections, replacing any earlier run over it.
+
+        Re-running a window is routine - after a threshold change, or by
+        accident - and must not double the vessel count. Rows are replaced only
+        for the same scene, channel and detector inside ``bbox``, so other
+        windows and the other polarisation keep their results. Every target
+        must therefore lie inside ``bbox``: one outside would survive the next
+        re-run and be duplicated by it. Returns the number of rows written.
+        """
+        shared = {
+            "scene_id": scene_id,
+            "polarisation": polarisation,
+            "detector": detector,
+            "detector_version": detector_version,
+            "confidence": confidence,
+        }
+        # Validate everything before deleting anything.
+        rows = [_detection_row(target, bbox, shared) for target in targets]
+
+        params: dict[str, object] = dict(bbox_params(bbox))
+        params.update(scene_id=scene_id, polarisation=polarisation, detector=detector)
+        # The R*Tree narrows the search, but it stores 32-bit floats rounded
+        # outward and so also matches points a few decimetres outside the box.
+        # Comparing the stored doubles deletes exactly what bbox.contains accepts.
+        sql = f"""
+            DELETE FROM detections
+            WHERE scene_id = :scene_id
+              AND polarisation = :polarisation
+              AND detector = :detector
+              AND id IN ({bbox_filter_sql("detections")})
+              AND lon BETWEEN :min_lon AND :max_lon
+              AND lat BETWEEN :min_lat AND :max_lat
+        """
+        self._session.execute(text(sql), params)
+        if rows:
+            self._session.execute(insert(Detection), rows)
+        return len(rows)
+
+    def in_bbox(
+        self,
+        bbox: BBox,
+        *,
+        since: dt.datetime | None = None,
+        limit: int = 20_000,
+    ) -> list[DetectionView]:
+        """Detections inside a bounding box, newest pass first."""
+        params: dict[str, object] = dict(bbox_params(bbox))
+        params["row_limit"] = limit
+        since_clause = ""
+        if since is not None:
+            params["since"] = _bind_timestamp(self._session, since)
+            since_clause = "AND s.acq_time >= :since"
+
+        sql = f"""
+            SELECT d.id, d.scene_id, d.lon, d.lat, d.length_m, d.width_m, d.heading_deg,
+                   d.confidence, d.detector, d.detector_version, d.polarisation,
+                   d.pixel_count, d.peak_dn, s.acq_time, s.satellite, s.product_name
+            FROM detections d
+            JOIN sar_scenes s ON s.id = d.scene_id
+            WHERE d.id IN ({bbox_filter_sql("detections")})
+            {since_clause}
+            ORDER BY s.acq_time DESC, d.id
+            LIMIT :row_limit
+        """
+        rows = self._session.execute(text(sql), params).mappings().all()
+        return [_to_detection_view(row) for row in rows]
+
+    def count(self) -> int:
+        return self._session.execute(select(func.count()).select_from(Detection)).scalar_one()
+
+
+def _detection_row(target: MeasuredTarget, bbox: BBox, shared: dict[str, object]) -> dict:
+    """Flatten a target into a row, refusing any that cannot be placed correctly."""
+    if target.lon is None or target.lat is None:
+        raise ValueError("detections must be georeferenced before they are stored")
+    if not (math.isfinite(target.lon) and math.isfinite(target.lat)):
+        raise ValueError(f"detection has a non-finite position: {target.lon}, {target.lat}")
+    if not bbox.contains(target.lon, target.lat):
+        raise ValueError(
+            f"detection at {target.lat:.5f}, {target.lon:.5f} lies outside the window it "
+            "replaces; clip detections to the window before storing them"
+        )
+    return {
+        **shared,
+        "lon": float(target.lon),
+        "lat": float(target.lat),
+        "length_m": float(target.length_m),
+        "width_m": float(target.width_m),
+        "heading_deg": float(target.heading_deg),
+        "pixel_count": int(target.pixel_count),
+        "peak_dn": float(target.peak_amplitude),
+    }
+
+
+def _to_detection_view(row) -> DetectionView:
+    return DetectionView(
+        id=row["id"],
+        scene_id=row["scene_id"],
+        lon=row["lon"],
+        lat=row["lat"],
+        length_m=row["length_m"],
+        width_m=row["width_m"],
+        heading_deg=row["heading_deg"],
+        confidence=row["confidence"],
+        detector=row["detector"],
+        detector_version=row["detector_version"],
+        polarisation=row["polarisation"],
+        pixel_count=row["pixel_count"],
+        peak_dn=row["peak_dn"],
+        acq_time=_row_timestamp(row["acq_time"]),
+        satellite=row["satellite"],
+        product_name=row["product_name"],
+    )

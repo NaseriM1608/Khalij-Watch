@@ -159,6 +159,13 @@ class Detection(Base):
     chip_path: Mapped[str | None] = mapped_column(String(512))
     detector: Mapped[str] = mapped_column(String(64), nullable=False, default="cfar")
     detector_version: Mapped[str | None] = mapped_column(String(32))
+    # The channel searched. VV and VH respond differently to the same vessel,
+    # so a re-run on one must never replace the other's results.
+    polarisation: Mapped[str | None] = mapped_column(String(4))
+    # Size and peak of the whole CFAR component, kept for ranking detections
+    # and for calibrating the false-alarm rate against later ground truth.
+    pixel_count: Mapped[int | None] = mapped_column(Integer)
+    peak_dn: Mapped[float | None] = mapped_column(Float)
 
     scene: Mapped[SarScene] = relationship(back_populates="detections")
     match: Mapped[FusionMatch | None] = relationship(back_populates="detection", uselist=False)

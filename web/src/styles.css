@@ -244,3 +244,44 @@ body {
   font-size: 11px;
 }
 .last-look { margin: 10px 0 0; color: var(--text); font-size: 11px; }
+
+/* --------------------------------------------------------------- radar -- */
+
+/* Legend key for radar detections: hollow, like the map symbol. */
+.ring {
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  border: 1.5px solid;
+  flex: none;
+  display: inline-block;
+}
+
+.maplibregl-popup-content {
+  background: var(--panel-2);
+  color: var(--text);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  padding: 10px 12px;
+  font-size: 11px;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+.maplibregl-popup-anchor-top .maplibregl-popup-tip { border-bottom-color: var(--panel-2); }
+.maplibregl-popup-anchor-bottom .maplibregl-popup-tip { border-top-color: var(--panel-2); }
+.maplibregl-popup-anchor-left .maplibregl-popup-tip { border-right-color: var(--panel-2); }
+.maplibregl-popup-anchor-right .maplibregl-popup-tip { border-left-color: var(--panel-2); }
+.maplibregl-popup-close-button { color: var(--muted); font-size: 16px; padding: 0 6px; }
+.maplibregl-popup-close-button:hover { background: none; color: var(--text); }
+
+.radar-popup { display: grid; gap: 3px; min-width: 200px; }
+.radar-popup strong {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ffd84a;
+  margin-bottom: 4px;
+}
+.radar-popup div { display: flex; justify-content: space-between; gap: 14px; }
+.radar-popup div span:first-child { color: var(--muted); }
+.radar-popup div span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
+.radar-popup p { margin: 6px 0 0; color: var(--muted); font-size: 10px; }

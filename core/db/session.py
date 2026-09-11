@@ -12,7 +12,7 @@ from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
-from sqlalchemy import Engine, create_engine, event
+from sqlalchemy import Engine, create_engine, event, inspect, text
 from sqlalchemy.orm import Session, sessionmaker
 from sqlalchemy.pool import StaticPool
 
@@ -79,7 +79,42 @@ def create_all(engine: Engine) -> None:
     if engine.dialect.name == "sqlite":
         from core.db.spatial import create_rtree_tables
 
+        _add_missing_columns(engine)
         create_rtree_tables(engine)
+
+
+def _add_missing_columns(engine: Engine) -> None:
+    """Add model columns that an existing SQLite table predates.
+
+    ``create_all`` creates missing tables but never alters existing ones, so a
+    column added to a model is absent from every database created before it,
+    and the first write touching it fails. Only the additive, nullable case is
+    handled. Anything else - a required column, a changed type - needs a real
+    migration and fails loudly rather than being guessed at.
+    """
+    inspector = inspect(engine)
+    existing = set(inspector.get_table_names())
+    statements: list[str] = []
+    for table in Base.metadata.sorted_tables:
+        if table.name not in existing:
+            continue
+        present = {column["name"] for column in inspector.get_columns(table.name)}
+        for column in table.columns:
+            if column.name in present:
+                continue
+            if not column.nullable:
+                raise RuntimeError(
+                    f"{table.name}.{column.name} is required but missing from the existing "
+                    "database; it needs an explicit migration"
+                )
+            column_type = column.type.compile(dialect=engine.dialect)
+            statements.append(f"ALTER TABLE {table.name} ADD COLUMN {column.name} {column_type}")
+
+    if not statements:
+        return
+    with engine.begin() as conn:
+        for statement in statements:
+            conn.execute(text(statement))
 
 
 def make_session_factory(engine: Engine) -> sessionmaker[Session]:

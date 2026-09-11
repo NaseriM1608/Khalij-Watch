@@ -55,6 +55,12 @@ MIN_PIXELS = 3
 # module docstring for how it was chosen and why it is provisional.
 EXTENT_PEAK_FRACTION = 0.25
 
+# CFAR makes a yes/no decision at a fixed false-alarm probability; it has no
+# notion of how likely a detection is to be a vessel. Stored CFAR detections
+# record 1.0, meaning "passed the test", which must not be read as, or ranked
+# against, a learned detector's probability.
+CFAR_CONFIDENCE = 1.0
+
 
 @dataclass(frozen=True)
 class Candidate:
@@ -235,6 +241,18 @@ def is_plausible_vessel(length_m: float, width_m: float, pixel_count: int) -> bo
         return False
     aspect = length_m / max(width_m, PIXEL_SPACING_M)
     return MIN_ASPECT_RATIO <= aspect <= MAX_ASPECT_RATIO
+
+
+def detector_version(config: CfarConfig, extent_peak_fraction: float = EXTENT_PEAK_FRACTION) -> str:
+    """A compact tag of every setting that changes what the detector reports.
+
+    Stored with each detection so that runs can be told apart and reproduced.
+    It must fit ``detections.detector_version``, which is 32 characters.
+    """
+    return (
+        f"L{config.looks:g}-g{config.guard_half}-t{config.train_half}"
+        f"-p{config.pfa:g}-h{extent_peak_fraction:g}"
+    )
 
 
 def detect_candidates(

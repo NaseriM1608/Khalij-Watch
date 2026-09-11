@@ -30,6 +30,7 @@ build/
 # Node
 node_modules/
 web/dist/
+*.tsbuildinfo
 
 # OS / editors
 .DS_Store
