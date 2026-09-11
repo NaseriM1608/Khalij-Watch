@@ -69,16 +69,19 @@ _QATAR_INTERIOR: Polygon = [
     (51.0, 25.7),
 ]
 
-# The Omani interior. Held east of about 56.6 deg E because Fujairah and the
-# UAE east coast sit near 56.35 deg E with deep-water anchorage immediately
-# offshore - a polygon reaching that far west would flag ships at anchor.
+# The Omani interior, held about half a degree inland of the Batinah coast,
+# which runs south-east from Sohar (24.4 N, 56.7 E) to Muscat (23.6 N, 58.6 E).
+# It stays south of 24 N, clear of the Fujairah and Kalba anchorages.
+#
+# An earlier version reached 25.6 N between 57.2 and 58.8 E. That is the open
+# Gulf of Oman - the eastern approach to Hormuz - so every vessel there, and
+# Muscat's port, would have been flagged as reporting from land.
 _OMAN_INTERIOR: Polygon = [
-    (56.7, 24.4),
-    (57.6, 23.2),
-    (58.8, 23.4),
-    (58.8, 25.6),
-    (57.2, 25.6),
-    (56.9, 24.8),
+    (56.5, 23.9),
+    (57.9, 23.1),
+    (59.0, 22.3),
+    (57.5, 21.0),
+    (56.4, 22.5),
 ]
 
 # The Musandam peninsula, kept small: the strait's traffic passes just north

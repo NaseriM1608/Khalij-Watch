@@ -115,6 +115,7 @@ def test_point_in_polygon_basic():
         (52.53, 29.60, "Shiraz, deep in the Iranian interior"),
         (46.72, 24.69, "Riyadh"),
         (55.35, 23.10, "Al Ain / Omani interior"),
+        (57.53, 22.93, "Nizwa, Omani interior"),
     ],
 )
 def test_inland_cities_are_recognised_as_land(lon, lat, place):
@@ -132,6 +133,13 @@ def test_inland_cities_are_recognised_as_land(lon, lat, place):
         (50.16, 26.70, "Ras Tanura terminal"),
         (51.53, 25.29, "Doha, on the Qatari coast"),
         (48.80, 29.60, "northern Gulf off Kuwait"),
+        # Regression: the Omani polygon once reached 25.6 N and marked the open
+        # Gulf of Oman, the approach to Hormuz, as land.
+        (57.90, 24.80, "open Gulf of Oman"),
+        (57.35, 25.15, "western Gulf of Oman"),
+        (58.50, 24.50, "Gulf of Oman north of Muscat"),
+        (58.57, 23.63, "Muscat, Sultan Qaboos port"),
+        (56.73, 24.36, "Sohar port"),
     ],
 )
 def test_water_and_ports_are_never_flagged_as_land(lon, lat, place):
