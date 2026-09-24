@@ -1499,3 +1499,39 @@ chips were cut; five lay within 64 px of the window edge. In the contact sheet
 each of the 48 brightest is centred on a vessel, and 16 open-sea negatives are
 empty speckle. The scene-level split is a salted SHA-256 of the product name,
 giving 79.8 / 10.1 / 10.1 percent over 100,000 names.
+
+**GFW labels, measured.** The first calls failed with connection errors that
+this host's intermittent network explains (curl got an answer in 1 s), so
+every GFW request now retries. On the 2026-09-10 Fujairah pass GFW reported
+129 detections in 112 cells at 02:06:53 UTC. Its per-cell counts equal our CFAR
+counts in 95 of 112 cells when the coordinates are read as cell centres (48 as
+corners), an independent check of our detector and georeferencing. But none of
+the 129 was matched to AIS. Matched and unmatched detections over the same box:
+
+| Period | Matched | Unmatched |
+|---|---|---|
+| Sep 2024 | 596 | 8 |
+| Sep 2025 | 583 | 3 |
+| Jun 2026 | 112 | 600 |
+| 8-25 Sep 2026 | 373 | 328 |
+
+Whether 2026 reflects GFW's processing after its summer outage or the regional
+AIS spoofing is not known, so labels come from passes before 2026. Grouping by
+MMSI returns only the MMSI; grouping by VESSEL_ID returns name, IMO, flag and
+class. `spatial_aggregation` is refused without a group-by. Sentinel-1C passes
+in 2025 have no GFW detections at all, so they are skipped rather than
+reported as "GFW saw nothing".
+
+**First labelled dataset: Fujairah, September 2025.** Of 15 passes, the 8 with
+GFW coverage (all S1A) gave 707 detections in the 20 km box: 410 labelled
+(58%), 42 not seen by GFW, 1 seen but unmatched, and 238 ambiguous (176
+because two of our detections share a 1.1 km cell, 60 near an edge with GFW
+across it, 2 where GFW saw several objects), plus 128 open-sea negatives. A
+flat 100 m edge rule had discarded a third of every cell; checking the cell
+across the edge instead raised the labels from 295 to 410 on the same passes.
+Label check: only 19 of the 266 labelled vessels have a registry length in
+GFW's identity data, so length labels will be sparse. On those 35 chips the
+registry and CFAR lengths correlate at r = 0.80 (median CFAR/registry 1.08, 29
+of 35 within 25%), which wrong labels would not produce. The largest
+disagreements repeat on the same two ships across passes, consistent with a
+barge alongside merging into one detection.

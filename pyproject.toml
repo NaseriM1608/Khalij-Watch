@@ -23,6 +23,8 @@ dependencies = [
     "boto3>=1.34",
     # Reads the OpenStreetMap land-polygon shapefile in scripts/fetch_coastline.py.
     "pyshp>=2.3",
+    # Global Fishing Watch API (non-commercial data): AIS-matched SAR detections as labels.
+    "gfw-api-python-client>=1.4",
     "pyais>=2.6",
     "structlog>=24.4",
     "python-dotenv>=1.0",
