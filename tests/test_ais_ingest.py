@@ -175,6 +175,48 @@ async def test_full_queue_drops_locally_rather_than_blocking_the_reader():
     assert stats.received == 5
 
 
+CONFIRMATION = json.dumps(
+    {"Message": {"CompressionEnabled": True}, "MessageType": "SubscriptionConfirmation"}
+)
+
+
+async def test_a_subscription_confirmation_is_not_counted_as_rejected():
+    """Regression: the live feed's first message is a confirmation, which the
+    stats reported as a rejected message, so a silent feed looked like a
+    parsing fault."""
+    socket = FakeSocket([CONFIRMATION, json.dumps(position_envelope())])
+    queue: asyncio.Queue = asyncio.Queue()
+    stats = IngestStats()
+    client = AisFeedClient(make_config(), queue, lambda _u: _ready(socket), stats=stats)
+
+    await client.run(max_attempts=1)
+
+    assert stats.confirmations == 1
+    assert stats.rejected == 0
+    assert queue.qsize() == 1  # only the position reaches the consumer
+
+
+async def test_a_server_error_is_surfaced_not_swallowed():
+    """A bad key or subscription is explained once, then the feed goes quiet."""
+    socket = FakeSocket([json.dumps({"error": "Api Key Is Not Valid"})])
+    queue: asyncio.Queue = asyncio.Queue()
+    stats = IngestStats()
+    client = AisFeedClient(make_config(), queue, lambda _u: _ready(socket), stats=stats)
+
+    await client.run(max_attempts=1)
+
+    assert stats.server_errors == 1
+    assert "Api Key Is Not Valid" in (stats.last_error or "")
+    assert queue.qsize() == 0
+
+
+def test_stats_report_confirmations_and_server_errors():
+    stats = IngestStats(confirmations=2, server_errors=1)
+
+    assert stats.as_dict()["confirmations"] == 2
+    assert stats.as_dict()["server_errors"] == 1
+
+
 async def test_connection_failure_is_recorded_and_retried():
     attempts = []
 

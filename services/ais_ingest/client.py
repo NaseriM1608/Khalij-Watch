@@ -61,6 +61,10 @@ class IngestStats:
     rejected: int = 0
     dropped_queue_full: int = 0
     suspect: int = 0
+    # Server control messages, kept apart from AIS traffic so that a quiet
+    # feed is not mistaken for a parsing fault, and a refusal is not lost.
+    confirmations: int = 0
+    server_errors: int = 0
     last_error: str | None = None
     sources_seen: set[str] = field(default_factory=set)
 
@@ -71,6 +75,8 @@ class IngestStats:
             "received": self.received,
             "parsed": self.parsed,
             "rejected": self.rejected,
+            "confirmations": self.confirmations,
+            "server_errors": self.server_errors,
             "dropped_queue_full": self.dropped_queue_full,
             "suspect": self.suspect,
             "last_error": self.last_error,
@@ -176,7 +182,22 @@ class AisFeedClient:
             if envelope is None:
                 self._stats.rejected += 1
                 continue
+            if self._handle_control(envelope):
+                continue
             self._offer(envelope)
+
+    def _handle_control(self, envelope: dict[str, Any]) -> bool:
+        """Consume a server control message. Returns True if ``envelope`` was one."""
+        if envelope.get("MessageType") == "SubscriptionConfirmation":
+            self._stats.confirmations += 1
+            logger.info("feed %s subscription confirmed", self._config.name)
+            return True
+        if "error" in envelope:
+            self._stats.server_errors += 1
+            self._stats.last_error = f"server: {envelope['error']}"
+            logger.error("feed %s reported an error: %s", self._config.name, envelope["error"])
+            return True
+        return False
 
     def _offer(self, envelope: dict[str, Any]) -> None:
         """Hand a message to the consumer without ever blocking the reader."""
