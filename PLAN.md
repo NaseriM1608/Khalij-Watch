@@ -1458,3 +1458,44 @@ blinds the port approach. The default stays 150 m, provisional: structures that
 recur on every pass are better removed by a persistence mask from repeated
 passes (section 8) than by a buffer that wide. The buffer is a square dilation,
 so it reaches about 1.4 times as far along diagonals.
+
+### 2026-09-25 - Phase 4 started: AIS coverage and the label source
+
+**aisstream has no coverage east of 40 E** (measured 2026-09-24, about
+20:15 UTC). The key streams normally elsewhere: 1,285 messages in 25 s
+worldwide, and 126-145 in 10 s over the North Sea through our own
+subscription code. A Gulf subscription returned only the subscription
+confirmation in 41 s, the ingest worker stored nothing in 90 s, and a
+30-75 E, 5-35 N subscription returned 88 messages in 90 s, all from the
+eastern Mediterranean. A published hobby tracker recorded 384 vessels in four
+days around UAE ports with the same feed, so those receivers have existed but
+are silent now. The worker keeps running, detached and logging to
+`data/logs/ais_ingest.log`, in case they return. It also exposed a stats bug:
+the subscription confirmation was counted as a rejected message.
+
+**Label source: Global Fishing Watch** (user decision). GFW's Sentinel-1
+vessel detections, 2017 to about five days ago, are matched to satellite and
+terrestrial AIS, which reaches open water. From the official
+gfw-api-python-client: the 4Wings report on `public-global-sar-presence:latest`
+can be grouped by `MMSI` or `VESSEL_ID` at `HIGH` spatial and `HOURLY`
+temporal resolution over a GeoJSON polygon, each row carrying a cell position
+and the matched vessel's identity. It is gridded, not per detection, so labels
+will attach to our CFAR detections only where a cell holds exactly one
+detection and one vessel. The Bulk Download API currently serves only
+`public-fixed-infrastructure-data:latest`. The cell size, and how unmatched
+detections appear, are to be confirmed on real responses once the token
+exists. Non-commercial terms.
+
+**Chips store raw uint16 amplitude, not uint8.** Section 8 sized chips as
+normalised uint8. The frozen sigmoid was calibrated on VV, where sea sits near
+80 DN; VH sea sits near 18 DN and many ships peak at a few hundred, so 8-bit
+chips would bake a VV calibration into VH. A chip is 128 x 128 x 2 x uint16 =
+64 KB, so 50k chips take about 3.2 GB. Normalisation is chosen and frozen at
+training time.
+
+**The chip pipeline was checked on real imagery.** On the S1D 2026-09-22
+02:06 UTC pass over the Fujairah anchorage, CFAR gave 153 detections and 148
+chips were cut; five lay within 64 px of the window edge. In the contact sheet
+each of the 48 brightest is centred on a vessel, and 16 open-sea negatives are
+empty speckle. The scene-level split is a salted SHA-256 of the product name,
+giving 79.8 / 10.1 / 10.1 percent over 100,000 names.
