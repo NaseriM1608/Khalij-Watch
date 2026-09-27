@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
 
 from core.labeling.gfw import AMBIGUOUS, GFW_ABSENT, GFW_UNMATCHED, LABELLED, GfwCell
 from core.labeling.manifest import ChipRecord
-from scripts.build_dataset import SceneResult, scene_counts, summary_rows
+from scripts.build_dataset import SceneResult, scene_counts, summary_path, summary_rows
 
 HOUR = dt.datetime(2025, 9, 17, 14, tzinfo=dt.UTC)
 
@@ -99,3 +100,18 @@ def test_summary_row_of_a_skipped_scene_carries_the_reason():
             "skipped": "no GFW detections",
         }
     ]
+
+
+def test_summary_path_names_the_build_period():
+    """Builds of different periods share an output directory and its manifest;
+    one fixed summary name let each build erase the previous period's summary."""
+    path = summary_path(Path("out"), dt.date(2024, 1, 1), dt.date(2025, 1, 1))
+
+    assert path == Path("out") / "summary_2024-01-01_2025-01-01.json"
+
+
+def test_summary_paths_of_different_periods_differ():
+    first = summary_path(Path("out"), dt.date(2024, 1, 1), dt.date(2025, 1, 1))
+    second = summary_path(Path("out"), dt.date(2025, 1, 1), dt.date(2026, 1, 1))
+
+    assert first != second

@@ -243,10 +243,10 @@ def process_scene(
 def scene_counts(
     detections: int, records: list[ChipRecord], chips_skipped: int, pass_cells: list[GfwCell]
 ) -> dict[str, int]:
-    """Per-scene tallies for the build log and summary.json.
+    """Per-scene tallies for the build log and the period summary.
 
     Chips cut off by the window edge or nodata are "chips_skipped": plain
-    "skipped" is the scene's own skip reason in summary.json.
+    "skipped" is the scene's own skip reason in the summary.
     """
     statuses = [r.extra.get("gfw_status") for r in records if r.kind != "negative"]
     reasons = [r.extra.get("gfw_reason") for r in records if r.kind != "negative"]
@@ -266,8 +266,13 @@ def scene_counts(
     }
 
 
+def summary_path(out: Path, since: dt.date, until: dt.date) -> Path:
+    """Per-period summary file: builds of other periods share ``out`` and its manifest."""
+    return out / f"summary_{since.isoformat()}_{until.isoformat()}.json"
+
+
 def summary_rows(results: list[SceneResult]) -> list[dict]:
-    """One summary.json row per scene: its identity and outcome, then its counts."""
+    """One summary row per scene: its identity and outcome, then its counts."""
     return [
         {
             "scene": r.scene,
@@ -378,11 +383,10 @@ def main() -> int:
         )
 
     total = update_manifest(args.out / "manifest.jsonl", results)
-    (args.out / "summary.json").write_text(
-        json.dumps(summary_rows(results), indent=1), encoding="utf-8"
-    )
+    summary = summary_path(args.out, args.since, args.until)
+    summary.write_text(json.dumps(summary_rows(results), indent=1), encoding="utf-8")
     print_summary(results)
-    print(f"manifest: {total} records in {args.out / 'manifest.jsonl'}")
+    print(f"manifest: {total} records in {args.out / 'manifest.jsonl'}; summary: {summary}")
     print(
         "Labels: Global Fishing Watch (non-commercial). Contains modified Copernicus Sentinel data."
     )
