@@ -236,10 +236,22 @@ def process_scene(
     (out / "shards").mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out / shard, chips=chips, chip_ids=np.array(kept))
     write_sheets(out, stem, chips, result.records)
-    statuses = [r.extra.get("gfw_status") for r in result.records if r.kind != "negative"]
-    reasons = [r.extra.get("gfw_reason") for r in result.records if r.kind != "negative"]
-    result.counts = {
-        "detections": len(detections),
+    result.counts = scene_counts(len(detections), result.records, len(skipped), pass_cells)
+    return result
+
+
+def scene_counts(
+    detections: int, records: list[ChipRecord], chips_skipped: int, pass_cells: list[GfwCell]
+) -> dict[str, int]:
+    """Per-scene tallies for the build log and summary.json.
+
+    Chips cut off by the window edge or nodata are "chips_skipped": plain
+    "skipped" is the scene's own skip reason in summary.json.
+    """
+    statuses = [r.extra.get("gfw_status") for r in records if r.kind != "negative"]
+    reasons = [r.extra.get("gfw_reason") for r in records if r.kind != "negative"]
+    return {
+        "detections": detections,
         "labelled": statuses.count("labelled"),
         "gfw_unmatched": statuses.count("gfw_unmatched"),
         "gfw_absent": statuses.count("gfw_absent"),
@@ -247,12 +259,25 @@ def process_scene(
         "ambiguous_edge": reasons.count("edge"),
         "ambiguous_crowded_ours": reasons.count("crowded_ours"),
         "ambiguous_crowded_gfw": reasons.count("crowded_gfw"),
-        "negatives": sum(1 for r in result.records if r.kind == "negative"),
-        "skipped": len(skipped),
+        "negatives": sum(1 for r in records if r.kind == "negative"),
+        "chips_skipped": chips_skipped,
         "gfw_matched_cells": sum(1 for c in pass_cells if c.matched),
         "gfw_unmatched_detections": sum(c.detections for c in pass_cells if not c.matched),
     }
-    return result
+
+
+def summary_rows(results: list[SceneResult]) -> list[dict]:
+    """One summary.json row per scene: its identity and outcome, then its counts."""
+    return [
+        {
+            "scene": r.scene,
+            "acquired": r.acquired,
+            "error": r.error,
+            "skipped": r.skipped,
+            **r.counts,
+        }
+        for r in results
+    ]
 
 
 def remove_outputs(out: Path, stem: str) -> None:
@@ -354,20 +379,7 @@ def main() -> int:
 
     total = update_manifest(args.out / "manifest.jsonl", results)
     (args.out / "summary.json").write_text(
-        json.dumps(
-            [
-                {
-                    "scene": r.scene,
-                    "acquired": r.acquired,
-                    "error": r.error,
-                    "skipped": r.skipped,
-                    **r.counts,
-                }
-                for r in results
-            ],
-            indent=1,
-        ),
-        encoding="utf-8",
+        json.dumps(summary_rows(results), indent=1), encoding="utf-8"
     )
     print_summary(results)
     print(f"manifest: {total} records in {args.out / 'manifest.jsonl'}")
