@@ -1,0 +1,8 @@
+# Training and export dependencies (PLAN.md Phase 5). Pinned, with PyPI's own
+# sha256 hashes, in training/requirements.txt: see scripts/pin_from_pypi.py.
+torch
+timm
+onnx
+onnxruntime
+numpy
+pytest

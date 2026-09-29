@@ -1,0 +1,40 @@
+"""Tests for pinning resolved requirements to PyPI's own file hashes."""
+
+from __future__ import annotations
+
+import pytest
+
+from scripts.pin_from_pypi import digests_from_release, parse_resolved, pinned_block
+
+
+def test_parse_resolved_reads_name_version_pairs_and_skips_comments():
+    text = "# comment\ntorch==2.14.0\n\nTimm==1.0.29  # via -r x\n"
+
+    assert parse_resolved(text) == [("torch", "2.14.0"), ("timm", "1.0.29")]
+
+
+def test_parse_resolved_rejects_unpinned_lines():
+    with pytest.raises(ValueError, match="numpy>=2"):
+        parse_resolved("numpy>=2\n")
+
+
+def test_digests_come_from_every_file_of_the_release():
+    release = {
+        "urls": [
+            {"filename": "a.whl", "digests": {"sha256": "aa"}, "yanked": False},
+            {"filename": "b.tar.gz", "digests": {"sha256": "bb"}, "yanked": False},
+        ]
+    }
+
+    assert digests_from_release(release) == ["aa", "bb"]
+
+
+def test_a_release_without_files_is_an_error():
+    with pytest.raises(ValueError, match="no files"):
+        digests_from_release({"urls": []})
+
+
+def test_pinned_block_lists_each_hash():
+    assert pinned_block("torch", "2.14.0", ["bb", "aa"]) == (
+        "torch==2.14.0 \\\n    --hash=sha256:aa \\\n    --hash=sha256:bb\n"
+    )
