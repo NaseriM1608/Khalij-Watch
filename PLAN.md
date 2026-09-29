@@ -1535,3 +1535,139 @@ registry and CFAR lengths correlate at r = 0.80 (median CFAR/registry 1.08, 29
 of 35 within 25%), which wrong labels would not produce. The largest
 disagreements repeat on the same two ships across passes, consistent with a
 barge alongside merging into one detection.
+
+### 2026-09-27 - Phase 4 scale-up: areas, and the label check at scale
+
+**Areas were chosen from GFW, not guessed.** A LOW-resolution (0.1 degree)
+4Wings grid over 54.0-57.6 E, 24.3-27.0 N for September 2024 and 2025, then
+the exact 20 km boxes at HIGH resolution with the build's own fetch, plus the
+catalogue passes whose footprint holds each box centre. September counts of
+AIS-matched GFW detections (matched / unmatched):
+
+| Area (centre, box) | Sep 2024 | Sep 2025 | S1A passes 2024 / 2025 |
+|---|---|---|---|
+| Fujairah 56.53 E 25.22 N, 20 km | 596 / 8 | 583 / 3 | 92 / 90 |
+| Khor Fakkan 56.52 E 25.41 N, 20 km | 313 / 15 | 488 / 18 | 92 / 90 |
+| Sharjah/Dubai 55.33 E 25.47 N, 20 km | 350 / 54 | 292 / 28 | 60 / 62 |
+| Ras Al Khaimah 55.88 E 26.02 N, 20 km | 69 / 13 | 119 / 12 | 91 / 91 |
+| Hormuz lanes 56.55 E 26.50 N, 40 km | 129 / 16 | 117 / 20 | 92 / 90 |
+| Hormuz lanes, same centre, 20 km | 35 / 1 | 34 / 2 | 92 / 90 |
+| Jebel Ali 54.87 E 25.12 N, 20 km | 108 / 7 | 59 / 3 | 60 / 62 |
+| Abu Dhabi 54.20 E 24.62 N, 20 km | 72 / 4 | 101 / 8 | 120 / 119 |
+
+Built (user choice): Fujairah 2024, and Khor Fakkan, Sharjah/Dubai, Ras Al
+Khaimah and the 40 km Hormuz lanes box for 2024-2025. The traffic lanes are
+sparse, so a 20 km box there would hardly pay; the 40 km box covers both lanes
+and brings moving ships. Sharjah/Dubai replaces Jebel Ali, which has about a
+third of its matched detections. Qeshm and Bandar Abbas are mostly unmatched
+and useless for labels. The boxes do not overlap, and a pass covering two of
+them lands in one split, since the split hashes the product name.
+
+**Builds** (every S1A pass with GFW detections processed, none failed; S1C
+passes skipped):
+
+| Area, period | S1A passes | Detections | Labelled | Unmatched | Not seen | Ambiguous (crowded) | Negatives |
+|---|---|---|---|---|---|---|---|
+| Fujairah 2025 | 89 | 7,819 | 4,157 | 504 | 560 | 2,417 (1,783) | 1,424 |
+| Fujairah 2024 | 92 | 8,341 | 4,916 | 25 | 789 | 2,438 (1,757) | 1,472 |
+| Khor Fakkan 2024-25 | 181 | 13,141 | 6,741 | 494 | 2,092 | 3,687 (2,632) | 2,896 |
+| Sharjah/Dubai 2024-25 | 120 | 9,078 | 4,290 | 479 | 1,264 | 3,031 (2,200) | 1,920 |
+| Ras Al Khaimah 2024-25 | 180 | 2,615 | 1,407 | 133 | 247 | 803 (610) | 2,880 |
+| Hormuz lanes 2024-25 (40 km) | 182 | 3,560 | 1,762 | 336 | 91 | 1,365 (1,120) | 2,912 |
+
+**Phase 4 target met: 23,273 labelled chips** over 844 scenes in five areas,
+plus 20,755 unlabelled detections and 13,504 open-sea negatives (3.14 GB).
+Vessel chips split 17,701 / 2,893 / 2,679 (76 / 12 / 12%). Contact sheets
+checked per area: labelled chips are centred on vessels (smaller and fainter at
+Ras Al Khaimah and Sharjah than at Fujairah; moving ships with wakes and
+azimuth smear in the Hormuz lanes), and negatives are open-sea speckle with no
+coast in them. Negatives are 0.58 per labelled chip, short of the ~1:3
+positive:negative target in section 8, and all are random open sea; the hard
+negatives section 8 asks for (platforms, azimuth ghosts, wind-roughened sea,
+land edges) are still to be mined.
+
+**CFAR splits large moving ships.** In the Hormuz box 1,120 of 3,560
+detections (31%) were ambiguous because two of our detections shared a cell,
+spread along the lanes rather than at an anchorage. Of the first 280, 260 have
+another detection within 30 px (median 170 m), their median CFAR length is 108
+m against 223 m for labelled ships, and their chips show one long ship, often
+with its wake, with the detection on one segment of it. These fragments stay
+unlabelled, so the labels are clean, but the same splitting would count one
+ship twice in Phase 6 dark-vessel counts; detections along one ship's axis
+should be merged first.
+
+**The length check at scale is r = 0.6-0.75, not 0.80.** Only 7-15% of
+labelled vessels have a registry length in GFW's identity data:
+
+| Area | Chips paired | Pearson r | Within 25% | Median CFAR / registry |
+|---|---|---|---|---|
+| Fujairah 2024 | 462 | 0.63 | 68% | 1.12 |
+| Fujairah 2025 | 411 | 0.62 | 69% | 1.11 |
+| Khor Fakkan | 1,001 | 0.70 | 75% | 1.12 |
+| Sharjah/Dubai | 794 | 0.60 | 63% | 1.17 |
+| Ras Al Khaimah | 171 | 0.75 | 60% | 1.16 |
+| Hormuz lanes | 153 | 0.56 | 54% | 1.16 |
+
+The 0.80 above came from 35 chips. Taken apart over both Fujairah years (873
+chips, Spearman 0.54), the outliers are measurement, not labelling: 719 of 873
+chips (82%) lie within 1.5 times the registry length, and on those r = 0.93. CFAR is more
+than 1.5 times too long on 136 chips, 125 of them from 16 vessels that repeat
+across passes: tugs, supply boats and bunker barges (45-130 m) measured at
+265-365 m. Their chips show a large ship with a second hull alongside, so the
+label names the small vessel moored against an unmatched or unresolved big one.
+CFAR is more than 1.5 times too short on 18 chips of 18 different vessels, all
+very large ships (276-361 m) where the hull extent kept only the bright end and
+the chip is centred there. Positions are therefore sound for detection
+training; length and class targets need filtering (for example dropping pairs
+outside 1.5 times, or service-vessel labels in bunkering anchorages) before
+Phase 5 uses them, and the point label of a very large ship can sit 100 m or
+more from its centre.
+
+**summary.json fixes.** Processed scenes wrote their chip-skip count under
+`skipped`, overwriting the scene's own skip reason; the count is now
+`chips_skipped`. Each build also overwrote the single `summary.json` of an
+output directory it shares with other periods; summaries are now
+`summary_<since>_<until>.json`, and the Fujairah 2025 summary was converted.
+
+**A DNS outage cost the first run.** From about 09:30 to 09:53 UTC this host
+resolved no names: Khor Fakkan processed its first 30 passes (to 2024-04-27)
+and failed the other 151 with the reader's network error, and the three later
+builds died in uv, which could not reach pypi.org to resolve packages. The
+runner now calls `uv run --offline` (cached packages, which also stops version
+drift between areas), waits until CDSE and GFW answer before each build, and
+re-runs an area, up to three times, while its summary reports failed scenes.
+Failed scenes keep their old manifest records and a re-run replaces the records
+of every scene it processes, so re-runs never duplicate chips.
+
+**Power-offs cost two Hormuz runs.** The PC was shut down from the Start menu
+during the 40 km build on 2026-09-27 (after sleeping) and again on 2026-09-28
+(Windows System log events 42 and 1074), at 56 and 62 of 223 passes. The build
+writes its manifest only at the end, so both runs were lost whole. The third
+ran in eight quarterly chunks into the same directory: each chunk writes its
+manifest records and its own summary, and the runner skips a chunk whose
+summary has no failed scene, so a shutdown costs at most one quarter (about 12
+minutes). The output is the same as one run, since passes, GFW hours, negative
+seeds and splits are all per scene.
+
+**GFW's vessel classes changed under us.** The same request (Fujairah box,
+September 2025, HIGH / HOURLY, matched, grouped by VESSEL_ID) returned
+`OTHER_NON_FISHING` / `TANKER` for 341 of the 410 labelled vessels on
+2026-09-25 and `OTHER` / `OTHER` for the same vessel IDs on 2026-09-27; the
+positions, vessel IDs, MMSIs and names are unchanged. An ungrouped LOW /
+ENTIRE report on the morning of 2026-09-27 still said `TANKER`. So labels
+fetched on the 27th (Fujairah 2024 and every new area) mostly carry no coarse
+class (Khor Fakkan: 5,647 of 6,741), while Fujairah 2025 does. Detection labels
+are unaffected; coarse classes must be re-derived for every label from one
+source, keyed by GFW vessel ID, before they are used. The vessel identity API
+shows where the tanker class went: for 50 vessels labelled on the 25th (39 of
+them `TANKER` then), the combined ship type (source
+`COMBINATION_OF_REGISTRY_AND_AIS_INFERRED_NN_INFO`) now reads `OTHER` for
+tankers while `CARGO`, `BUNKER` and `PASSENGER` survive. The registry records
+still say `TANKER` or `CARGO`, but only 25 of the 50 vessels have one; they
+also carry gross tonnage where the length is missing, a possible size proxy.
+
+**GFW allows one report at a time per token.** A probe run while a build was
+fetching was refused with HTTP 429 ("not currently enabled to perform more
+than one concurrent report"). The client raises `RateLimitError`, which
+`is_transient` does not retry, so a report started alongside a build would
+have killed it. Query GFW only while no build is fetching.
