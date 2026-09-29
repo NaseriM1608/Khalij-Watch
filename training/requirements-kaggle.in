@@ -1,0 +1,3 @@
+# Kaggle command-line tool for uploading the dataset and pushing notebooks.
+# Pinned with PyPI's own hashes in training/requirements-kaggle.txt.
+kaggle
