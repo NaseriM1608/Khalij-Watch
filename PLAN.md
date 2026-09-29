@@ -1575,7 +1575,8 @@ passes skipped):
 | Ras Al Khaimah 2024-25 | 180 | 2,615 | 1,407 | 133 | 247 | 803 (610) | 2,880 |
 | Hormuz lanes 2024-25 (40 km) | 182 | 3,560 | 1,762 | 336 | 91 | 1,365 (1,120) | 2,912 |
 
-**Phase 4 target met: 23,273 labelled chips** over 844 scenes in five areas,
+**Phase 4 target met: 23,273 labelled chips** over 844 area-scenes (422
+distinct passes, since one pass often covers several boxes) in five areas,
 plus 20,755 unlabelled detections and 13,504 open-sea negatives (3.14 GB).
 Vessel chips split 17,701 / 2,893 / 2,679 (76 / 12 / 12%). Contact sheets
 checked per area: labelled chips are centred on vessels (smaller and fainter at
@@ -1671,3 +1672,95 @@ fetching was refused with HTTP 429 ("not currently enabled to perform more
 than one concurrent report"). The client raises `RateLimitError`, which
 `is_transient` does not retry, so a report started alongside a build would
 have killed it. Query GFW only while no build is fetching.
+
+### 2026-09-29 - Hard negatives, the training index, and Phase 5 code
+
+**Azimuth ghosts are not mined: they are not visible at 10 m.** From the
+annotation XML (IW1/IW2/IW3 PRF 1,717/1,452/1,686 Hz, slant range 800-900 km,
+orbit speed 7.6 km/s) a ghost should sit 470-580 px along azimuth from its
+ship. Over the 29 brightest Fujairah ships the median azimuth profile peaks at
+1.19x sea at +564 px, no higher than speckle at control offsets (1.15x at
++-170-210 px), and CFAR detections within 3 columns of 5,544 bright ships show
+no excess in the ghost band (79/65/91 per 50 px against 78 before and 46
+after).
+
+**Hard negatives, and what the data offer.** `scripts/mine_negatives.py`
+re-reads every built scene, re-runs CFAR so every target in the window is
+avoided, and cuts chips on land edges (10-70% land, 300 m from any
+detection), on sea at least 1.3 times the window's sea median with no point
+target in the chip, at offshore structures standing on the acquisition date,
+and on extra open sea (56 per scene, to reach the ~1:3 ratio of section 8).
+Records go to one file per scene, written atomically, so a rerun resumes; the
+area manifests are never touched. The five boxes hold little of the hard
+kinds: Fujairah and Khor Fakkan are open water, the six Sharjah "platforms"
+in the Offshore Platform Dataset each stood for one quarter in 2017-2019 or
+2023, and Hormuz has two platforms standing in 2024-2025 plus the Musandam
+coast. Unlabelled detections at 4 spots seen in at least 30% of an area's
+scenes and never labelled are recast as persistent-structure negatives (185
+chips) in the index. A DNS outage failed 69 Ras Al Khaimah scenes; the rerun
+recovered all of them.
+
+**The training index** (`scripts/build_index.py`, `data/datasets/index.jsonl`)
+prefixes chip ids and shards with the area (19,938 ids had clashed), and
+states per chip what it may teach: positive (AIS-matched vessel at the
+centre), ignore (unidentified detection, maybe dark), full negative (open sea
+or clutter sampled 1 km clear of every target), or centre negative (platform,
+coast, persistent structure: CFAR masked the ground around them, so vessels
+nobody detected may stand elsewhere in the chip). Each chip lists the other
+known objects inside it, across areas, so no unlabelled detection is ever
+trained as sea. `--verify` opens every shard.
+
+**Normalisation frozen per band** (`core/inference/contract.py`), solved on
+4,000 chips so the median sea maps to 0.1 and the median ship peak to 0.9:
+VV sea 60 DN, ship peak 1,829 DN (scale 0.0025, offset 945); VH sea 36 DN,
+ship peak 650 DN (0.0072, 343). The older VV-only curve (0.004, 640) sent half
+of all ship peaks above 0.99.
+
+**Targets and model.** `core/labeling/targets.py` encodes a fixed 3-cell
+Gaussian per vessel at stride 2 with sub-pixel offsets, a zero loss weight
+within 8 cells of every unlabelled detection, and supervision only within 8
+cells of a centre negative; `core/inference/decode.py` inverts it (3x3
+max-pool peaks), and an encode-decode round trip returns the input
+coordinates. `training/` holds the timm EfficientNet-B0 + U-Net point
+detector (objectness and offset heads only: length, heading and class wait
+for trustworthy targets), reduced-focal or BCE objectness, L1 offsets,
+weighted sampling (easy sea 0.15, unidentified 0.1), a resumable loop scored
+by point F1 within 100 m on the val split, and ONNX opset 17 export with INT8
+dynamic quantisation; ONNX matches PyTorch within 1e-3. Training runs on
+Kaggle (user decision), from ImageNet weights; Kaggle GPUs and notebook
+internet need a phone-verified account.
+
+**Packages through a mirror, verified against PyPI.** files.pythonhosted.org
+resets every connection from this host while pypi.org answers.
+`training/requirements.in` is resolved through a public mirror (the TUNA
+mirror refuses uv's JSON requests; Aliyun works) and `scripts/pin_from_pypi.py`
+writes `training/requirements.txt` with the sha256 hashes pypi.org publishes
+for all 37 packages. `uv pip install --require-hashes` into `.venv-train`
+therefore accepts only files identical to PyPI's.
+
+**The finished dataset** (`data/datasets/index.jsonl`, 112,917 chips from 422
+passes, every record checked against its shard):
+
+| Split | Positive | Ignore | Full negative | Centre negative |
+|---|---|---|---|---|
+| train | 17,701 | 15,896 | 48,853 | 4,612 |
+| val | 2,893 | 2,424 | 7,647 | 655 |
+| test | 2,679 | 2,250 | 6,767 | 540 |
+
+Negatives: 60,592 open sea, 5,074 coast, 2,675 bright clutter, 548 platform,
+185 persistent structure, 69,074 in all, 2.97 per positive. Only 8,482 are
+hard; the weighted sampler keeps easy sea at 0.15.
+
+**CPU smoke run and export, this laptop (Ryzen 7 3700U).** One epoch of 256
+samples plus 256 val chips took 87 s, so a 40,000-sample epoch would take
+over two hours here: training belongs on the GPU. The smoke run exposed a real
+bug, now fixed: OneCycleLR fixes its total steps, so resuming under a changed
+epoch count crashed; resuming now refuses a changed schedule with a clear
+message. ONNX export on the smoke checkpoint: fp32 17.9 MB, within 2.4e-6 of
+PyTorch, **6.2 s per 2048 px tile**. **INT8 dynamic quantisation, as section
+7.1b asks, is 12.7 times slower (78.4 s per tile)** at 4.8 MB and 1.7e-3:
+ONNX Runtime quantises the convolutions into integer kernels that this CPU
+runs slowly. fp32 is the deployment default; if INT8 is wanted, it must be
+static (QDQ) quantisation calibrated on real chips, measured the same way.
+At 6.2 s a tile, a 20 km box costs about 6 s and a full scene about 20
+minutes before CFAR prefiltering.
