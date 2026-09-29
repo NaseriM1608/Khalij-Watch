@@ -8,6 +8,7 @@ data/
 models/*.onnx
 models/*.pt
 models/*.pth
+models/runs/
 *.SAFE/
 *.tif
 *.tiff

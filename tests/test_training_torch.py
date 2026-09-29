@@ -113,6 +113,18 @@ def test_chip_counts_score_a_perfect_prediction():
     assert counts[0.5] == (1, 0, 0)
 
 
+def test_resume_refuses_a_changed_learning_rate_schedule():
+    """OneCycleLR fixes its total steps; a checkpoint cannot follow a different plan."""
+    from training.train import Config, check_resumable
+
+    config = Config(index="i", root="r", out="o", epochs=2)
+    saved = {**{f: getattr(config, f) for f in ("epochs", "samples_per_epoch", "batch_size", "lr")}}
+
+    check_resumable({**saved}, config)
+    with pytest.raises(ValueError, match="epochs 1 -> 2"):
+        check_resumable({**saved, "epochs": 1}, config)
+
+
 def test_onnx_export_matches_pytorch(tmp_path):
     pytest.importorskip("onnxruntime")
     from training.export import export_onnx, max_difference

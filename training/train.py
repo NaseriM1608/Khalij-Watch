@@ -156,6 +156,24 @@ def evaluate(model: PointDetector, loader: DataLoader, device: torch.device) -> 
     }
 
 
+# Fields that fix OneCycleLR's total steps and shape; a checkpoint cannot follow others.
+_SCHEDULE_FIELDS = ("epochs", "samples_per_epoch", "batch_size", "lr")
+
+
+def check_resumable(saved: dict, config: Config) -> None:
+    """Refuse to resume a run whose learning-rate schedule the new config would change."""
+    changed = [
+        f"{field} {saved.get(field)} -> {getattr(config, field)}"
+        for field in _SCHEDULE_FIELDS
+        if saved.get(field) != getattr(config, field)
+    ]
+    if changed:
+        raise ValueError(
+            f"cannot resume {config.out}: {', '.join(changed)} would change the "
+            "learning-rate schedule; train into a new --out instead"
+        )
+
+
 def train(config: Config) -> dict[str, float]:
     torch.manual_seed(config.seed)
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
@@ -173,6 +191,7 @@ def train(config: Config) -> dict[str, float]:
     start, best_f1, history = 0, -1.0, []
     if (out / "last.pt").is_file():
         state = torch.load(out / "last.pt", map_location=device, weights_only=False)
+        check_resumable(state["config"], config)
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         scheduler.load_state_dict(state["scheduler"])
@@ -190,7 +209,7 @@ def train(config: Config) -> dict[str, float]:
             scaler.step(optimizer)
             scaler.update()
             scheduler.step()
-            total += float(loss)
+            total += float(loss.detach())
         metrics = {
             "epoch": epoch,
             "loss": total / len(train_loader),
