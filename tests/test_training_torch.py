@@ -113,6 +113,59 @@ def test_chip_counts_score_a_perfect_prediction():
     assert counts[0.5] == (1, 0, 0)
 
 
+def test_threshold_grid_reaches_below_a_tenth():
+    """Late epochs of kaggle-v1 all peaked at 0.10, the old grid's floor."""
+    from training.train import THRESHOLDS
+
+    assert min(THRESHOLDS) < 0.1
+    assert list(THRESHOLDS) == sorted(THRESHOLDS)
+
+
+def test_evaluate_checkpoint_reports_overall_and_per_area(tmp_path):
+    import json
+
+    from training.evaluate import evaluate_checkpoint
+
+    chips = np.full((2, 2, CHIP_SIZE, CHIP_SIZE), 40, dtype=np.uint16)
+    chips[0, :, 60:68, 62:66] = 1500
+    (tmp_path / "a" / "shards").mkdir(parents=True)
+    np.savez(tmp_path / "a" / "shards" / "S.npz", chips=chips, chip_ids=np.array(["S/d0", "S/n0"]))
+    base = {"scene": "S.SAFE", "split": "test", "shard": "a/shards/S.npz", "row": 10.0, "col": 20.0}
+    records = [
+        {
+            **base,
+            "chip_id": "a/S/d0",
+            "area": "a",
+            "index": 0,
+            "supervision": "positive",
+            "objects": [],
+        },
+        {
+            **base,
+            "chip_id": "a/S/n0",
+            "area": "a",
+            "index": 1,
+            "supervision": "full_negative",
+            "objects": [],
+            "source": "sea",
+        },
+    ]
+    (tmp_path / "index.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+    model = small_model()
+    torch.save(
+        {"model": model.state_dict(), "config": {"encoder": "efficientnet_b0"}}, tmp_path / "m.pt"
+    )
+
+    report = evaluate_checkpoint(
+        tmp_path / "m.pt", tmp_path / "index.jsonl", tmp_path, split="test", batch_size=2, workers=0
+    )
+
+    assert set(report) == {"all", "a"}
+    assert report["all"]["truth"] == 1
+    assert {"f1", "precision", "recall", "threshold"} <= set(report["all"]["best"])
+    assert min(float(t) for t in report["all"]["by_threshold"]) < 0.1
+
+
 def test_resume_refuses_a_changed_learning_rate_schedule():
     """OneCycleLR fixes its total steps; a checkpoint cannot follow a different plan."""
     from training.train import Config, check_resumable

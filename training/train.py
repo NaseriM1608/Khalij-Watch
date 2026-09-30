@@ -32,7 +32,8 @@ from training.model import PointDetector
 
 # 100 m at 10 m pixels: labels are CFAR centroids of hulls up to ~300 m long.
 TOLERANCE_PX = 10.0
-THRESHOLDS = tuple(round(t, 2) for t in np.arange(0.1, 0.95, 0.05))
+# Reaches below 0.1: every late epoch of the first Kaggle run peaked at 0.10, then the floor.
+THRESHOLDS = (0.01, 0.02, 0.03, 0.05, 0.07, *(round(t, 2) for t in np.arange(0.1, 0.95, 0.05)))
 
 
 @dataclass
@@ -100,7 +101,10 @@ def step_loss(
 
 
 def chip_counts(
-    heat: np.ndarray, offsets: np.ndarray, targets: dict[str, np.ndarray]
+    heat: np.ndarray,
+    offsets: np.ndarray,
+    targets: dict[str, np.ndarray],
+    thresholds: tuple[float, ...] = THRESHOLDS,
 ) -> dict[float, tuple[int, int, int]]:
     """(tp, fp, fn) per threshold for one chip, ignoring unsupervised ground."""
     weight = targets["weight"]
@@ -113,12 +117,12 @@ def chip_counts(
         size = weight.shape[0]
         return 0 <= cell_r < size and 0 <= cell_c < size and weight[cell_r, cell_c] > 0
 
-    peaks = decode_peaks(heat, offsets, threshold=THRESHOLDS[0])
+    peaks = decode_peaks(heat, offsets, threshold=min(thresholds))
     return {
         t: match_points(
             [p for p in peaks if p[2] >= t], truth, tolerance=TOLERANCE_PX, counts=supervised
         )
-        for t in THRESHOLDS
+        for t in thresholds
     }
 
 
