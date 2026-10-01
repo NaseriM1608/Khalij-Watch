@@ -1830,6 +1830,14 @@ and with neighbouring cells allowed. Model threshold 0.45 (from validation).
 | neighbours | CFAR | 0.748 | 0.968 | **0.844** | 0.981 | **0.891** |
 | neighbours | model | 0.730 | 0.901 | **0.807** | 0.935 | **0.628** |
 
+**Caveat (found after this entry was written): the two recall columns are
+optimistic.** `summarise()` scores the AIS-matched and unmatched subsets each
+against all predictions, so one prediction in a cell holding one of each
+counts as a hit in both. Precision, recall and F1 come from one joint
+assignment and stand. The subset recalls must be recomputed from a joint
+assignment before they are quoted; this work was also done under time
+pressure and is listed for review in `handoff.md` section 2.0.
+
 By area (neighbours, F1 CFAR / model): Fujairah 0.866 / 0.820, Khor Fakkan
 0.819 / 0.792, Sharjah/Dubai 0.842 / 0.836, Ras Al Khaimah 0.834 / 0.727,
 Hormuz lanes 0.854 / 0.740 (model recall 0.65 there). **Phase 5's done-when
