@@ -36,9 +36,20 @@ PERSISTENCE_MIN_SCENE_SHARE = 0.3
 PERSISTENCE_MAX_LABELLED_SHARE = 0.05
 
 
+def is_vessel(record: dict[str, Any]) -> bool:
+    """AIS-matched by GFW, or seen by GFW's own detector without AIS.
+
+    The second kind was "ignore" in kaggle-v1, and the model then missed
+    vessels without AIS (recall 0.49 against CFAR's 0.78 on GFW detections).
+    """
+    if record["kind"] == "vessel":
+        return True
+    return record["kind"] == "unlabelled" and record["extra"].get("gfw_status") == "gfw_unmatched"
+
+
 def supervision_for(record: dict[str, Any]) -> str:
     kind = record["kind"]
-    if kind == "vessel":
+    if is_vessel(record):
         return POSITIVE
     if kind == "unlabelled":
         return IGNORE
@@ -71,8 +82,10 @@ def as_persistent(record: dict[str, Any]) -> dict[str, Any]:
 
 def object_label(record: dict[str, Any]) -> str | None:
     """How a detection appears inside other chips, or None for chips of empty ground."""
-    if record["kind"] in ("vessel", "unlabelled"):
-        return record["kind"]
+    if is_vessel(record):
+        return "vessel"
+    if record["kind"] == "unlabelled":
+        return "unlabelled"
     if record["kind"] == "negative" and record["source"] == "persistent":
         return "persistent"
     return None

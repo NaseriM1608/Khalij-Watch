@@ -57,6 +57,25 @@ def test_supervision_follows_kind_and_negative_source():
         assert supervision_for(rec("a", kind="negative", source=source)) == CENTRE_NEGATIVE
 
 
+def test_a_detection_gfw_saw_without_ais_is_a_positive():
+    """kaggle-v1 ignored these and learned to miss non-AIS vessels (recall 0.49 vs CFAR 0.78)."""
+    seen = rec("a", kind="unlabelled")
+    seen["extra"] = {"gfw_status": "gfw_unmatched"}
+    absent = rec("b", kind="unlabelled")
+    absent["extra"] = {"gfw_status": "gfw_absent"}
+
+    assert supervision_for(seen) == POSITIVE
+    assert supervision_for(absent) == IGNORE
+
+
+def test_gfw_unmatched_neighbours_appear_as_vessels_inside_other_chips():
+    centre = rec("S/d0000")
+    neighbour = rec("S/d0001", kind="unlabelled", row=1010.0)
+    neighbour["extra"] = {"gfw_status": "gfw_unmatched"}
+
+    assert chip_objects(centre, [centre, neighbour]) == [[10.0, 0.0, "vessel"]]
+
+
 # --- namespacing -----------------------------------------------------------------
 
 

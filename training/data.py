@@ -70,16 +70,37 @@ def flip_sample(
     return {key: np.ascontiguousarray(value) for key, value in out.items()}
 
 
+def random_crop(
+    sample: dict[str, np.ndarray], size: int, *, top: int, left: int
+) -> dict[str, np.ndarray]:
+    """A size x size window of a sample at even (top, left), targets cut to match."""
+    if top % 2 or left % 2 or size % 2:
+        raise ValueError("crops must start and end on even pixels to keep the stride-2 grid")
+    out_top, out_left, out_size = top // 2, left // 2, size // 2
+    out = {"image": sample["image"][:, top : top + size, left : left + size]}
+    for key in ("heatmap", "weight", "offset", "offset_mask"):
+        out[key] = sample[key][:, out_top : out_top + out_size, out_left : out_left + out_size]
+    return {key: np.ascontiguousarray(value) for key, value in out.items()}
+
+
 class ChipDataset:
     """Map-style dataset over index records; shards load lazily per worker."""
 
     def __init__(
-        self, records: list[dict[str, Any]], root: Path, *, augment: bool, seed: int = 0
+        self,
+        records: list[dict[str, Any]],
+        root: Path,
+        *,
+        augment: bool,
+        seed: int = 0,
+        crop: int = 0,
     ) -> None:
         self.records = records
         self.root = Path(root)
         self.augment = augment
         self.seed = seed
+        # Random crops while augmenting, so a vessel is not always at the centre.
+        self.crop = crop
         self._shards: OrderedDict[str, np.ndarray] = OrderedDict()
         self._draws = 0
 
@@ -107,6 +128,10 @@ class ChipDataset:
             sample = flip_sample(
                 sample, vertical=bool(rng.integers(2)), horizontal=bool(rng.integers(2))
             )
+            if self.crop:
+                room = (image.shape[-1] - self.crop) // 2
+                top, left = 2 * int(rng.integers(room + 1)), 2 * int(rng.integers(room + 1))
+                sample = random_crop(sample, self.crop, top=top, left=left)
         return sample
 
     def _next_draw(self) -> int:

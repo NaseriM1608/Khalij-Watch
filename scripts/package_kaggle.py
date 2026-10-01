@@ -56,17 +56,21 @@ def _link_or_copy(source: Path, target: Path) -> None:
         shutil.copy2(source, target)
 
 
-def stage(root: Path, out: Path, *, code_dirs: list[Path]) -> dict[str, Any]:
-    """Assemble the upload folder; returns counts and total bytes."""
+def stage(root: Path, out: Path, *, code_dirs: list[Path], shards: bool = True) -> dict[str, Any]:
+    """Assemble the upload folder; returns counts and total bytes.
+
+    With ``shards=False`` only the index and code are staged: a new labelling
+    of the same chips, uploaded beside the existing chip dataset.
+    """
     out.mkdir(parents=True, exist_ok=True)
-    shards: set[str] = set()
+    referenced: set[str] = set()
     with (root / "index.jsonl").open(encoding="utf-8") as handle:
         for line in handle:
-            if line.strip():
-                shards.add(json.loads(line)["shard"])
+            if line.strip() and shards:
+                referenced.add(json.loads(line)["shard"])
     for name in ("index.jsonl", "index_meta.json"):
         shutil.copy2(root / name, out / name)
-    for shard in sorted(shards):
+    for shard in sorted(referenced):
         _link_or_copy(root / shard, out / shard)
     for code in code_dirs:
         target = out / "code" / code.name
@@ -74,7 +78,7 @@ def stage(root: Path, out: Path, *, code_dirs: list[Path]) -> dict[str, Any]:
             shutil.rmtree(target)
         shutil.copytree(code, target, ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
-    return {"shards": len(shards), "bytes": size}
+    return {"shards": len(referenced), "bytes": size}
 
 
 def main() -> int:
@@ -82,9 +86,15 @@ def main() -> int:
     parser.add_argument("--root", type=Path, default=Path("data") / "datasets")
     parser.add_argument("--out", type=Path, default=Path("data") / "kaggle" / "khalij-watch-chips")
     parser.add_argument("--dataset-id", required=True, help="<kaggle-username>/<slug>")
+    parser.add_argument("--index-only", action="store_true", help="stage index and code, no shards")
     args = parser.parse_args()
 
-    report = stage(args.root, args.out, code_dirs=[ROOT / "core", ROOT / "training"])
+    report = stage(
+        args.root,
+        args.out,
+        code_dirs=[ROOT / "core", ROOT / "training"],
+        shards=not args.index_only,
+    )
     (args.out / "dataset-metadata.json").write_text(
         json.dumps(dataset_metadata(args.dataset_id), indent=1), encoding="utf-8"
     )

@@ -110,6 +110,39 @@ def test_flipping_moves_image_and_targets_together():
     assert np.array_equal(flipped["image"], image[:, ::-1, ::-1])
 
 
+def test_random_crop_moves_the_ship_off_centre_and_keeps_targets_aligned():
+    from core.labeling.targets import encode_targets
+    from training.data import random_crop
+
+    image = np.zeros((2, CHIP_SIZE, CHIP_SIZE), dtype=np.float32)
+    targets = encode_targets(
+        {"supervision": "positive", "row": 1000.0, "col": 2000.0, "objects": []}
+    )
+    sample = {
+        "image": image,
+        "heatmap": targets["heatmap"][None],
+        "weight": targets["weight"][None],
+        "offset": targets["offset"],
+        "offset_mask": targets["offset_mask"][None],
+    }
+
+    cropped = random_crop(sample, 96, top=10, left=30)
+
+    assert cropped["image"].shape == (2, 96, 96)
+    assert cropped["heatmap"].shape == (1, 48, 48)
+    ((row, col, _),) = decode_peaks(cropped["heatmap"][0], cropped["offset"], threshold=0.5)
+    assert (row, col) == pytest.approx((64.0 - 10, 64.0 - 30))
+
+
+def test_augmented_samples_are_cropped_for_jitter(dataset_root):
+    records = load_index(dataset_root / "index.jsonl", "train")
+    sample = ChipDataset(records, dataset_root, augment=True, seed=1, crop=96)[0]
+
+    assert sample["image"].shape == (2, 96, 96)
+    assert sample["heatmap"].shape == (1, 48, 48)
+    assert sample["heatmap"].max() == pytest.approx(1.0)
+
+
 def test_augmented_samples_keep_shapes_and_are_unclipped(dataset_root):
     records = load_index(dataset_root / "index.jsonl", "train")
     dataset = ChipDataset(records, dataset_root, augment=True, seed=1)

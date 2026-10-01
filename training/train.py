@@ -53,6 +53,10 @@ class Config:
     workers: int = 2
     max_val_chips: int = 0
     seed: int = 0
+    # Random training crops (0 = whole chips): vessels off-centre, as in scenes.
+    crop: int = 0
+    # Keep every epoch's weights, to choose later by an independent reference.
+    keep_epochs: bool = False
 
 
 def make_loaders(config: Config) -> tuple[DataLoader, DataLoader, list[dict]]:
@@ -71,7 +75,9 @@ def make_loaders(config: Config) -> tuple[DataLoader, DataLoader, list[dict]]:
         generator=torch.Generator().manual_seed(config.seed),
     )
     train = DataLoader(
-        ChipDataset(train_records, Path(config.root), augment=True, seed=config.seed),
+        ChipDataset(
+            train_records, Path(config.root), augment=True, seed=config.seed, crop=config.crop
+        ),
         batch_size=config.batch_size,
         sampler=sampler,
         num_workers=config.workers,
@@ -233,6 +239,11 @@ def train(config: Config) -> dict[str, float]:
             "config": asdict(config),
         }
         torch.save(state, out / "last.pt")
+        if config.keep_epochs:
+            torch.save(
+                {"model": model.state_dict(), "config": asdict(config), "metrics": metrics},
+                out / f"epoch_{epoch:02d}.pt",
+            )
         if metrics["f1"] >= best_f1:
             torch.save(
                 {"model": model.state_dict(), "config": asdict(config), "metrics": metrics},

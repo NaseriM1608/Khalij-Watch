@@ -1,0 +1,18 @@
+{
+ "id": "mahmoudnaseri/khalij-watch-point-detector-v2",
+ "title": "khalij-watch point detector v2",
+ "code_file": "train_point_detector_v2.ipynb",
+ "language": "python",
+ "kernel_type": "notebook",
+ "is_private": true,
+ "enable_gpu": true,
+ "enable_tpu": false,
+ "enable_internet": true,
+ "dataset_sources": [
+  "mahmoudnaseri/khalij-watch-chips",
+  "mahmoudnaseri/khalij-watch-index-v2"
+ ],
+ "competition_sources": [],
+ "kernel_sources": [],
+ "model_sources": []
+}

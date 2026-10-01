@@ -47,6 +47,17 @@ def test_stage_copies_code_without_caches(tmp_path):
     assert not (out / "code" / "training" / "__pycache__").exists()
 
 
+def test_index_only_staging_leaves_the_shards_out(tmp_path):
+    root, out = tmp_path / "data", tmp_path / "stage"
+    write_index(root, ["a/shards/S.npz"])
+
+    report = stage(root, out, code_dirs=[], shards=False)
+
+    assert (out / "index.jsonl").is_file()
+    assert not (out / "a").exists()
+    assert report["shards"] == 0
+
+
 def test_metadata_is_private_licence_other_and_named():
     meta = dataset_metadata("someone/khalij-watch-chips")
 
