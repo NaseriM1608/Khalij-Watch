@@ -424,11 +424,11 @@ class MeasuredTarget(Protocol):
 
     lon: float | None
     lat: float | None
-    length_m: float
-    width_m: float
-    heading_deg: float
-    pixel_count: int
-    peak_amplitude: float
+    length_m: float | None
+    width_m: float | None
+    heading_deg: float | None
+    pixel_count: int | None
+    peak_amplitude: float | None
 
 
 @dataclass(frozen=True)
@@ -556,16 +556,23 @@ def _detection_row(target: MeasuredTarget, bbox: BBox, shared: dict[str, object]
             f"detection at {target.lat:.5f}, {target.lon:.5f} lies outside the window it "
             "replaces; clip detections to the window before storing them"
         )
+    # A point detector reports a position and its own score, but no hull.
+    own_confidence = getattr(target, "confidence", None)
     return {
         **shared,
         "lon": float(target.lon),
         "lat": float(target.lat),
-        "length_m": float(target.length_m),
-        "width_m": float(target.width_m),
-        "heading_deg": float(target.heading_deg),
-        "pixel_count": int(target.pixel_count),
-        "peak_dn": float(target.peak_amplitude),
+        "length_m": _optional(float, target.length_m),
+        "width_m": _optional(float, target.width_m),
+        "heading_deg": _optional(float, target.heading_deg),
+        "pixel_count": _optional(int, target.pixel_count),
+        "peak_dn": _optional(float, target.peak_amplitude),
+        **({"confidence": float(own_confidence)} if own_confidence is not None else {}),
     }
+
+
+def _optional(kind: type, value: object) -> object:
+    return None if value is None else kind(value)
 
 
 def _to_detection_view(row) -> DetectionView:

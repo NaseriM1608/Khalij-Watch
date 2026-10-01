@@ -1,0 +1,9 @@
+# Model-vs-CFAR comparison on real scenes: geospatial stack + ONNX Runtime.
+# Pinned with PyPI's own hashes in training/requirements-eval.txt.
+numpy
+rasterio
+boto3
+sqlalchemy
+gfw-api-python-client
+onnxruntime
+pytest

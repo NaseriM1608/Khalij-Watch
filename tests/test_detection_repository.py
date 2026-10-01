@@ -104,6 +104,46 @@ def test_stored_detections_come_back_with_their_scene(session, detections):
     assert hit.detector == "cfar"
 
 
+@dataclass(frozen=True)
+class Point:
+    """Shaped like a point-detector result: a position and a score, no hull."""
+
+    lon: float
+    lat: float
+    confidence: float
+    length_m: None = None
+    width_m: None = None
+    heading_deg: None = None
+    pixel_count: None = None
+    peak_amplitude: None = None
+
+
+def test_point_detections_store_their_own_confidence_and_no_hull(session, detections):
+    scene_id = add_scene(session)
+    detections.replace_in_bbox(
+        scene_id,
+        WINDOW,
+        [Point(56.5, 25.2, 0.83)],
+        polarisation="VV+VH",
+        detector="pointdet",
+        detector_version="kaggle-v1",
+        confidence=1.0,
+    )
+    session.flush()
+
+    hit = detections.in_bbox(WINDOW)[0]
+
+    assert hit.confidence == pytest.approx(0.83)
+    assert hit.detector == "pointdet"
+    assert (hit.length_m, hit.width_m, hit.heading_deg, hit.pixel_count, hit.peak_dn) == (
+        None,
+        None,
+        None,
+        None,
+        None,
+    )
+
+
 def test_detection_age_is_measured_from_the_radar_pass(session, detections):
     """Not from when the row was written: radar is never live."""
     scene_id = add_scene(session)

@@ -233,6 +233,9 @@ def store_detections(
     detections: list[Candidate],
     polarisation: str,
     version: str,
+    *,
+    detector: str = "cfar",
+    confidence: float = CFAR_CONFIDENCE,
 ) -> int:
     """Record the scene, then replace this box's detections from it."""
     engine = create_db_engine(database_url)
@@ -249,10 +252,56 @@ def store_detections(
             box,
             detections,
             polarisation=polarisation.upper(),
-            detector="cfar",
+            detector=detector,
             detector_version=version,
-            confidence=CFAR_CONFIDENCE,
+            confidence=confidence,
         )
+
+
+def run_model(args: argparse.Namespace, settings, box: BBox, product: SarProduct) -> int:
+    """Detect with the exported point detector on VV+VH, under the same masks as CFAR."""
+    from core.inference.runner import DETECTOR, PointDetection, PointDetectorRunner
+    from scripts.build_dataset import read_pair
+
+    if not args.model.is_file():
+        print(f"model not found: {args.model}")
+        return 1
+    try:
+        scene, window, bands = read_pair(product, box)
+    except S3AccessError as exc:
+        print(f"could not read the scene: {exc}")
+        return 1
+    infra, standing = platform_mask(box, product.acq_start.date(), scene, window)
+    coast = coastline_mask(box, scene, window, args.coast_buffer_m)
+    masked = (bands == 0).any(axis=0)
+    for layer in (infra, coast):
+        if layer is not None:
+            masked |= layer
+    runner = PointDetectorRunner(args.model)
+    started = time.perf_counter()
+    peaks = runner.detect(bands, masked)
+    found: list[PointDetection] = []
+    if peaks:
+        lons, lats = scene.lonlat(
+            [r + window.row_off for r, _, _ in peaks], [c + window.col_off for _, c, _ in peaks]
+        )
+        found = [
+            PointDetection(float(lon), float(lat), score)
+            for lon, lat, (_, _, score) in zip(lons, lats, peaks, strict=True)
+            if box.contains(float(lon), float(lat))
+        ]
+    version = args.model.stem.removeprefix("point_detector_")
+    print(
+        f"detector : point detector {version} (threshold {runner.threshold:g}, "
+        f"{runner.tile} px tiles) in {time.perf_counter() - started:.1f}s -> "
+        f"{len(found)} vessels in the box; {standing} standing platforms masked"
+    )
+    if not args.no_store:
+        written = store_detections(
+            settings.database_url, product, box, found, "dv", version, detector=DETECTOR
+        )
+        print(f"database : {written} detections stored ({DETECTOR}, {version})")
+    return 0
 
 
 def print_table(detections: list[Candidate], limit: int = 25) -> None:
@@ -286,6 +335,15 @@ def main() -> int:
     parser.add_argument(
         "--no-coastline", action="store_true", help="skip the coastline mask, for comparison"
     )
+    parser.add_argument(
+        "--detector", choices=("cfar", "model"), default="cfar", help="CFAR or the point detector"
+    )
+    parser.add_argument(
+        "--model",
+        type=Path,
+        default=Path("models") / "point_detector_kaggle-v1.onnx",
+        help="exported ONNX point detector (fp32)",
+    )
     args = parser.parse_args()
     if not 0 < args.size_km <= MAX_SIZE_KM:
         parser.error(f"--size-km must be in (0, {MAX_SIZE_KM}]")
@@ -298,6 +356,8 @@ def main() -> int:
         return 1
     print(f"scene    : {product.name}")
     print(f"acquired : {product.acq_start:%Y-%m-%d %H:%M} UTC ({product.orbit_direction})")
+    if args.detector == "model":
+        return run_model(args, settings, box, product)
 
     try:
         with open_measurement(product, args.pol) as dataset:
