@@ -1764,3 +1764,42 @@ runs slowly. fp32 is the deployment default; if INT8 is wanted, it must be
 static (QDQ) quantisation calibrated on real chips, measured the same way.
 At 6.2 s a tile, a 20 km box costs about 6 s and a full scene about 20
 minutes before CFAR prefiltering.
+
+### 2026-10-01 - Phase 5: first trained point detector (kaggle-v1)
+
+**Run.** Private Kaggle dataset `mahmoudnaseri/khalij-watch-chips` (uploaded
+through the user's VPN: api.kaggle.com refuses this network otherwise) and
+private notebook `mahmoudnaseri/khalij-watch-point-detector`. Kaggle assigned
+a Tesla T4 although a P100 was requested. EfficientNet-B0 from ImageNet
+weights, reduced focal loss, 15 epochs x 40,000 weighted samples, batch 64,
+one-cycle lr 1e-3: about 8 minutes an epoch, 2 hours in all.
+
+**Validation F1 by epoch** (100 m tolerance, unlabelled ground ignored):
+0.450, 0.574, 0.692, 0.633, 0.728, 0.725, **0.910**, 0.768, 0.759, 0.899,
+0.831, 0.794, 0.780, 0.810, 0.810, while the training loss fell steadily from
+1.08 to 0.10. The last five epochs all peaked at threshold 0.10, then the
+grid's floor; the grid now reaches 0.01. Re-scored locally with it, the final
+epoch is genuinely worse (0.810 at 0.07), not capped, and it lost recall in
+the dense anchorages (Fujairah 0.904 -> 0.748, Khor Fakkan 0.930 -> 0.756,
+Ras Al Khaimah 0.923 -> 0.663) while Sharjah and Hormuz held or improved.
+Hypothesis, untested: late training learns to suppress ships that look like
+their unlabelled anchorage neighbours. The epoch-6 checkpoint was chosen on
+validation F1 before any test number existed.
+
+**Held-out test, epoch 6, threshold 0.45 fixed on validation:** F1 **0.937**
+(precision 0.927, recall 0.947; 2,687 hits, 212 false alarms, 150 misses of
+2,837 vessels). The best threshold on test itself gives 0.938, so the
+validation threshold transfers. By area: Khor Fakkan 0.959, Fujairah 0.948,
+Ras Al Khaimah 0.927, Sharjah/Dubai 0.904, Hormuz lanes 0.870 (recall 0.817;
+moving ships and CFAR fragments). These are scores against our own
+auto-labels (CFAR detections matched by GFW), not independent truth.
+
+**Export.** fp32 ONNX matches PyTorch within 1.0e-5 and takes 5.4 s per 2048
+px tile on this laptop: the model runs on the CPU, as Phase 5 requires. INT8
+dynamic quantisation is unusable on the trained model, not just slow: logits
+differ by up to 8.8 (on Kaggle and locally) and it takes 64 s a tile.
+
+**Still open for Phase 5:** "beats the CFAR baseline on held-out data". Our
+labels are CFAR detections, so CFAR cannot be scored fairly against them; the
+comparison needs an independent reference, such as GFW's full SAR detections
+(matched and unmatched) for the test passes.
