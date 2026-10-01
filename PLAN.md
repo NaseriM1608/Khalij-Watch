@@ -1803,3 +1803,50 @@ differ by up to 8.8 (on Kaggle and locally) and it takes 64 s a tile.
 labels are CFAR detections, so CFAR cannot be scored fairly against them; the
 comparison needs an independent reference, such as GFW's full SAR detections
 (matched and unmatched) for the test passes.
+
+### 2026-10-01 - Model vs CFAR against GFW: the model does not beat CFAR yet
+
+**Inference tiles must match the training chips.** EfficientNet's
+squeeze-excitation blocks average over the whole input. On 2048 px tiles of
+calm, dark sea the model went blind: Fujairah 2024-05-16 (VV sea median 25 DN)
+gave 0 detections on 2048 px tiles, 69 on 512, 84 on 256 and 128 on 128,
+while a normal-sea pass (69 DN) gave 73-78 at every size. The runner
+(`core/inference/runner.py`) therefore uses 128 px tiles with 32 px overlap:
+6 s for a 20 km box on this laptop. Wired into `scripts/detect_window.py
+--detector model`; on the S1D pass of 2026-09-27 over Fujairah it found 97
+vessels (CFAR 102), stored and served by the API as `pointdet`.
+
+**Comparison** (`scripts/compare_cfar_model.py`): 40 held-out test passes, 8
+per area evenly spaced in 2024-2025, chosen before any result. The reference
+is every GFW SAR detection in the box at the pass hour (1,669: 1,540 matched
+to AIS, 129 unmatched), outside the shared land/coast/platform mask. GFW gives
+counts per 0.01 degree cell, so both detectors are scored per cell, strictly
+and with neighbouring cells allowed. Model threshold 0.45 (from validation).
+
+| Rule | Detector | Precision | Recall | F1 | Recall, AIS-matched | Recall, unmatched |
+|---|---|---|---|---|---|---|
+| same cell | CFAR | 0.710 | 0.918 | **0.800** | 0.931 | **0.775** |
+| same cell | model | 0.679 | 0.838 | **0.750** | 0.869 | **0.488** |
+| neighbours | CFAR | 0.748 | 0.968 | **0.844** | 0.981 | **0.891** |
+| neighbours | model | 0.730 | 0.901 | **0.807** | 0.935 | **0.628** |
+
+By area (neighbours, F1 CFAR / model): Fujairah 0.866 / 0.820, Khor Fakkan
+0.819 / 0.792, Sharjah/Dubai 0.842 / 0.836, Ras Al Khaimah 0.834 / 0.727,
+Hormuz lanes 0.854 / 0.740 (model recall 0.65 there). **Phase 5's done-when
+("beats the CFAR baseline on held-out data") is not met.**
+
+**Why: the label bias of section 8, now measured.** The model was trained to
+reproduce CFAR detections that GFW matched to AIS; every detection GFW saw but
+could not match was "ignore". It learned AIS-like vessels: on GFW detections
+without AIS its recall is 0.49 against CFAR's 0.78 (n = 129, so wide error
+bars), and it loses most where non-AIS traffic is common (Hormuz, Ras Al
+Khaimah). Both detectors' precision near 0.7 is partly GFW missing small
+vessels, which this reference cannot separate from false alarms. The 0.937
+F1 on our own labels and this result are consistent: the model is good at
+the task it was given, and the task under-specifies dark vessels.
+
+**Next run (proposed):** make the 1,603 training detections GFW saw without
+AIS (`gfw_unmatched`) positives instead of ignored; add translation jitter so
+positives are not always at the chip centre; keep 128 px inference; select
+the checkpoint on this GFW comparison over validation passes, not on our own
+labels; re-run this comparison on all 92 test passes.
