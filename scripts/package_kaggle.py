@@ -30,13 +30,30 @@ ROOT = Path(__file__).resolve().parents[1]
 DESCRIPTION = (
     "Sentinel-1 VV+VH chips (128x128, uint16 amplitude) of vessels and negatives in the "
     "Persian Gulf and Gulf of Oman, 2024-2025, with a training index. Vessel labels: Global "
-    "Fishing Watch SAR vessel detections matched to AIS (non-commercial use only). Contains "
-    "modified Copernicus Sentinel data. Platform positions: Offshore Platform Dataset "
+    "Fishing Watch SAR vessel detections, with or without AIS (non-commercial use only). "
+    "Contains modified Copernicus Sentinel data. Platform positions: Offshore Platform Dataset "
     "(CC BY 4.0). Coastline: OpenStreetMap contributors (ODbL). Private research dataset."
 )
 
+INDEX_DESCRIPTION = (
+    "Training index (index.jsonl, index_meta.json) and training code for the khalij-watch "
+    "Sentinel-1 vessel chips of the Persian Gulf and Gulf of Oman; the chips themselves are "
+    "in the separate chip dataset. Vessel labels: Global Fishing Watch SAR vessel detections, "
+    "with or without AIS (non-commercial use only). Contains modified Copernicus Sentinel "
+    "data. Platform positions: Offshore Platform Dataset (CC BY 4.0). Coastline: "
+    "OpenStreetMap contributors (ODbL). Private research dataset."
+)
 
-def dataset_metadata(dataset_id: str) -> dict[str, Any]:
+
+def dataset_metadata(dataset_id: str, *, index_only: bool = False) -> dict[str, Any]:
+    if index_only:
+        return {
+            "id": dataset_id,
+            "title": "khalij-watch Gulf SAR training index",
+            "subtitle": "Training index and code for the khalij-watch chip dataset",
+            "description": INDEX_DESCRIPTION,
+            "licenses": [{"name": "other"}],
+        }
     return {
         "id": dataset_id,
         "title": "khalij-watch Gulf SAR vessel chips",
@@ -60,8 +77,11 @@ def stage(root: Path, out: Path, *, code_dirs: list[Path], shards: bool = True) 
     """Assemble the upload folder; returns counts and total bytes.
 
     With ``shards=False`` only the index and code are staged: a new labelling
-    of the same chips, uploaded beside the existing chip dataset.
+    of the same chips, uploaded beside the existing chip dataset. It refuses a
+    folder that already holds shards, so the chip dataset's index is never replaced.
     """
+    if not shards and out.exists() and any(p.is_dir() for p in out.rglob("shards")):
+        raise ValueError(f"{out} holds shards; stage the index into its own folder")
     out.mkdir(parents=True, exist_ok=True)
     referenced: set[str] = set()
     with (root / "index.jsonl").open(encoding="utf-8") as handle:
@@ -84,10 +104,17 @@ def stage(root: Path, out: Path, *, code_dirs: list[Path], shards: bool = True) 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--root", type=Path, default=Path("data") / "datasets")
-    parser.add_argument("--out", type=Path, default=Path("data") / "kaggle" / "khalij-watch-chips")
+    parser.add_argument(
+        "--out",
+        type=Path,
+        help="default data/kaggle/khalij-watch-chips, or khalij-watch-index with --index-only",
+    )
     parser.add_argument("--dataset-id", required=True, help="<kaggle-username>/<slug>")
     parser.add_argument("--index-only", action="store_true", help="stage index and code, no shards")
     args = parser.parse_args()
+    if args.out is None:
+        name = "khalij-watch-index" if args.index_only else "khalij-watch-chips"
+        args.out = Path("data") / "kaggle" / name
 
     report = stage(
         args.root,
@@ -95,8 +122,9 @@ def main() -> int:
         code_dirs=[ROOT / "core", ROOT / "training"],
         shards=not args.index_only,
     )
+    metadata = dataset_metadata(args.dataset_id, index_only=args.index_only)
     (args.out / "dataset-metadata.json").write_text(
-        json.dumps(dataset_metadata(args.dataset_id), indent=1), encoding="utf-8"
+        json.dumps(metadata, indent=1), encoding="utf-8"
     )
     print(f"staged {report['shards']} shards, {report['bytes'] / 1e9:.2f} GB in {args.out}")
     return 0
