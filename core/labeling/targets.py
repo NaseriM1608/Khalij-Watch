@@ -7,10 +7,11 @@ where the truth is unknown), and sub-pixel offsets at each vessel's peak.
 What a chip teaches comes from its ``supervision`` (core.labeling.index);
 the ``objects`` list places the other known detections inside it. Unlabelled
 detections are never trained as sea: they may be vessels that broadcast
-nothing. Positives are drawn last, so a vessel beside an unlabelled detection
-keeps its own supervision.
+nothing, so their discs are drawn after the negative ones. Positives are drawn
+last, so a vessel beside an unlabelled detection keeps its own supervision.
 
-Geometry: the chip centre pixel is round(row, col) and sits at chip index 64;
+Geometry: the chip centre pixel is floor(row + 0.5, col + 0.5), rounding halves
+up as core.labeling.chips cuts it, and sits at chip index 64;
 chip pixel p maps to output coordinate (p - 0.5) / STRIDE, so output cell i
 has its centre at chip pixel 2i + 0.5.
 """
@@ -42,6 +43,11 @@ def output_position(chip_coord: float) -> tuple[int, float]:
     return cell, out - cell
 
 
+def _centre_pixel(coord: float) -> int:
+    """The scene pixel a chip is cut around: halves round up, as in core.labeling.chips."""
+    return math.floor(coord + 0.5)
+
+
 def encode_targets(record: dict[str, Any]) -> dict[str, np.ndarray]:
     """Heatmap, weight, offset (2, H, W) and offset_mask for one index record."""
     supervision = record["supervision"]
@@ -54,20 +60,21 @@ def encode_targets(record: dict[str, Any]) -> dict[str, np.ndarray]:
     offset = np.zeros((2, size, size), dtype=np.float32)
     offset_mask = np.zeros((size, size), dtype=np.float32)
 
-    # Sub-pixel position of the chip centre: chips are cut around round(row, col).
+    # Sub-pixel position of the chip centre: chips are cut around the centre pixel.
     half = CHIP_SIZE // 2
-    centre_row = half + record["row"] - round(record["row"])
-    centre_col = half + record["col"] - round(record["col"])
+    centre_row = half + record["row"] - _centre_pixel(record["row"])
+    centre_col = half + record["col"] - _centre_pixel(record["col"])
     centre = (supervision, centre_row, centre_col)
     placed = [centre] + [
         (label, centre_row + d_row, centre_col + d_col) for d_row, d_col, label in record["objects"]
     ]
 
     for label, row, col in placed:
+        if label in ("centre_negative", "persistent"):
+            _disc(weight, row, col, CENTRE_RADIUS, 1.0)
+    for label, row, col in placed:
         if label in ("ignore", "unlabelled"):
             _disc(weight, row, col, IGNORE_RADIUS, 0.0)
-        elif label in ("centre_negative", "persistent"):
-            _disc(weight, row, col, CENTRE_RADIUS, 1.0)
     for label, row, col in placed:
         if label in ("positive", "vessel"):
             _draw_positive(heatmap, weight, offset, offset_mask, row, col)

@@ -10,6 +10,7 @@ from core.labeling.index import (
     as_persistent,
     chip_objects,
     index_record,
+    object_label,
     persistent_spots,
     supervision_for,
 )
@@ -58,7 +59,7 @@ def test_supervision_follows_kind_and_negative_source():
 
 
 def test_a_detection_gfw_saw_without_ais_is_a_positive():
-    """kaggle-v1 ignored these and learned to miss non-AIS vessels (recall 0.49 vs CFAR 0.78)."""
+    """kaggle-v1 ignored these and learned to miss non-AIS vessels (recall 0.48 vs CFAR 0.77)."""
     seen = rec("a", kind="unlabelled")
     seen["extra"] = {"gfw_status": "gfw_unmatched"}
     absent = rec("b", kind="unlabelled")
@@ -74,6 +75,24 @@ def test_gfw_unmatched_neighbours_appear_as_vessels_inside_other_chips():
     neighbour["extra"] = {"gfw_status": "gfw_unmatched"}
 
     assert chip_objects(centre, [centre, neighbour]) == [[10.0, 0.0, "vessel"]]
+
+
+def test_a_record_is_a_positive_chip_exactly_when_it_is_a_vessel_inside_other_chips():
+    """What a chip teaches at its centre and how it appears in its neighbours must agree."""
+    records = [rec("v", kind="vessel")]
+    for status in ("gfw_unmatched", "gfw_absent", "ambiguous", None):
+        unlabelled = rec(f"u-{status}", kind="unlabelled")
+        unlabelled["extra"] = {} if status is None else {"gfw_status": status}
+        records += [unlabelled, as_persistent(unlabelled)]
+    records += [
+        rec(f"n-{source}", kind="negative", source=source)
+        for source in ("sea", "clutter", "platform", "coast")
+    ]
+
+    for r in records:
+        label = object_label(r)
+        assert (supervision_for(r) == POSITIVE) == (label == "vessel"), r["chip_id"]
+        assert (supervision_for(r) == IGNORE) == (label == "unlabelled"), r["chip_id"]
 
 
 # --- namespacing -----------------------------------------------------------------
@@ -110,6 +129,31 @@ def test_chip_objects_lists_other_detections_inside_the_chip():
     objects = chip_objects(centre, [centre, near, far])
 
     assert objects == [[10.0, -30.0, "unlabelled"]]
+
+
+def test_chip_objects_keep_offsets_from_minus_half_up_to_but_not_including_half():
+    centre = rec("S/d0000", row=1000.0, col=2000.0)
+    inside = [
+        rec("S/a", row=936.0, col=2000.0),  # d_row = -64
+        rec("S/b", row=1063.9, col=2000.0),  # d_row = 63.9
+        rec("S/c", row=1000.0, col=1936.0),  # d_col = -64
+        rec("S/d", row=1000.0, col=2063.9),  # d_col = 63.9
+    ]
+    outside = [
+        rec("S/e", row=1064.0, col=2000.0),  # d_row = 64
+        rec("S/f", row=1000.0, col=2064.0),  # d_col = 64
+        rec("S/g", row=935.9, col=2000.0),  # d_row = -64.1
+        rec("T/a", scene="T.SAFE", row=1010.0, col=2000.0),  # another scene
+    ]
+
+    objects = chip_objects(centre, [centre, *inside, *outside])
+
+    assert [[round(d_row, 6), round(d_col, 6), label] for d_row, d_col, label in objects] == [
+        [-64.0, 0.0, "vessel"],
+        [63.9, 0.0, "vessel"],
+        [0.0, -64.0, "vessel"],
+        [0.0, 63.9, "vessel"],
+    ]
 
 
 def test_chip_objects_ignore_other_scenes_and_negatives():

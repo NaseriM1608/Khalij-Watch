@@ -40,7 +40,8 @@ def is_vessel(record: dict[str, Any]) -> bool:
     """AIS-matched by GFW, or seen by GFW's own detector without AIS.
 
     The second kind was "ignore" in kaggle-v1, and the model then missed
-    vessels without AIS (recall 0.49 against CFAR's 0.78 on GFW detections).
+    vessels without AIS (recall 0.48 against CFAR's 0.77 on GFW detections
+    without AIS).
     """
     if record["kind"] == "vessel":
         return True

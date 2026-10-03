@@ -36,7 +36,7 @@ from core.labeling.index import (  # noqa: E402
     persistent_spots,
 )
 
-INDEX_VERSION = "khalij-watch-index-v1"
+INDEX_VERSION = "khalij-watch-index-v2"
 
 
 def read_jsonl(path: Path) -> list[dict[str, Any]]:
@@ -106,18 +106,28 @@ def meta_for(
                 f"of an area's scenes, labelled <= {PERSISTENCE_MAX_LABELLED_SHARE:.0%} of the time"
             ),
             "supervision": {
-                "positive": "vessel at the centre (GFW AIS match)",
-                "ignore": "unidentified detection at the centre; may be a dark vessel",
+                "positive": (
+                    "vessel at the centre: matched to AIS by GFW, or an unlabelled detection "
+                    "GFW's own detector saw without AIS (gfw_unmatched), away from persistent spots"
+                ),
+                "ignore": (
+                    "any other unlabelled detection at the centre (gfw_absent, ambiguous, "
+                    "no GFW status); may be a dark vessel"
+                ),
                 "full_negative": "no target anywhere in the chip (sea, clutter)",
                 "centre_negative": "centre is not a vessel (platform, coast, persistent)",
             },
-            "objects": "[row offset, col offset, label] of other known objects in the chip",
+            "objects": (
+                "[row offset, col offset, label] of other known objects in the chip; label is "
+                "vessel (as positive), unlabelled (as ignore) or persistent"
+            ),
         },
         "caveats": [
             "vessel_type is unreliable: GFW folded tankers into OTHER between 2026-09-25 and "
             "2026-09-27, so most labels fetched later carry no coarse class",
             "detections outside an area's box but inside its read window are not listed in objects",
-            "chip pixel (64, 64) is round(row, col); objects are float offsets from row, col",
+            "chip pixel (64, 64) is floor(row + 0.5, col + 0.5); objects are float offsets "
+            "from row, col",
         ],
     }
 

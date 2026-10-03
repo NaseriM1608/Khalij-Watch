@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import itertools
+
 import numpy as np
 import pytest
 
@@ -11,6 +13,8 @@ from core.inference.contract import (
     STRIDE,
     normalise_chip,
 )
+from core.inference.decode import decode_peaks
+from core.labeling.chips import ChipRequest, extract_chips
 from core.labeling.targets import (
     CENTRE_RADIUS,
     IGNORE_RADIUS,
@@ -62,6 +66,24 @@ def test_chip_centre_maps_to_the_middle_output_cell():
 
     assert cell == 32
     assert offset == pytest.approx(-0.25)
+
+
+@pytest.mark.parametrize("top, left", [(1000, 2000), (1001, 2001), (1000, 2001), (1001, 2000)])
+def test_target_lands_on_the_vessel_in_the_chip_as_cut_at_half_pixels(top, left):
+    """A 2x2 vessel's centroid sits at x.5; the chip cut rounds it half up, not half to even."""
+    window = np.full((2, 300, 300), 100, dtype=np.uint16)
+    origin = (900, 1900)
+    window[:, top - 900 : top - 900 + 2, left - 1900 : left - 1900 + 2] = 5000
+    row, col = top + 0.5, left + 0.5
+
+    chips, kept, _ = extract_chips(window, [ChipRequest("c", row, col)], window_offset=origin)
+    targets = encode_targets(rec("positive", row=row, col=col))
+    peaks = decode_peaks(targets["heatmap"], targets["offset"], threshold=0.5)
+
+    assert kept == ["c"]
+    vessel = np.argwhere(chips[0, 0] == 5000).mean(axis=0)
+    assert len(peaks) == 1
+    assert peaks[0][:2] == pytest.approx(tuple(vessel), abs=1e-4)
 
 
 # --- positives ---------------------------------------------------------------------
@@ -122,6 +144,32 @@ def test_persistent_structure_inside_a_chip_is_an_explicit_negative():
 
     assert targets["weight"][32, 52] == 1
     assert targets["heatmap"][32, 52] == 0
+
+
+def test_ignore_wins_over_a_negative_whatever_the_object_order():
+    """Unlabelled detections are never trained as sea, even under a persistent disc."""
+    objects = [[0.0, 10.0, "unlabelled"], [0.0, 20.0, "persistent"]]
+
+    for supervision in ("centre_negative", "ignore"):
+        first, second = (
+            encode_targets(rec(supervision, objects=list(order)))["weight"]
+            for order in itertools.permutations(objects)
+        )
+
+        np.testing.assert_array_equal(first, second)
+        assert first[32, 40] == 0  # inside both the unlabelled and the persistent disc
+        assert first[32, 47] == 1  # the persistent disc alone
+        assert first[32, 26] == (supervision == "centre_negative")  # the centre's own ground
+
+
+def test_a_vessel_inside_an_ignore_disc_keeps_its_positive():
+    objects = [[0.0, 10.0, "unlabelled"], [0.0, 20.0, "persistent"], [0.0, 14.0, "vessel"]]
+
+    for order in itertools.permutations(objects):
+        targets = encode_targets(rec("ignore", objects=list(order)))
+
+        assert targets["weight"][32, 39] == 1
+        assert targets["heatmap"][32, 39] == pytest.approx(1.0)
 
 
 def test_full_negative_supervises_everything_as_empty():
