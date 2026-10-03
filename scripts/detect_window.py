@@ -271,8 +271,11 @@ def run_model(args: argparse.Namespace, settings, box: BBox, product: SarProduct
     except S3AccessError as exc:
         print(f"could not read the scene: {exc}")
         return 1
+    except ValueError as exc:  # read_window refuses an empty window
+        print(f"the requested box does not intersect the scene ({exc})")
+        return 1
     infra, standing = platform_mask(box, product.acq_start.date(), scene, window)
-    coast = coastline_mask(box, scene, window, args.coast_buffer_m)
+    coast = None if args.no_coastline else coastline_mask(box, scene, window, args.coast_buffer_m)
     masked = (bands == 0).any(axis=0)
     for layer in (infra, coast):
         if layer is not None:

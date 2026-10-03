@@ -1,11 +1,13 @@
 """Run the exported point detector (ONNX, fp32) over a SAR window on the CPU.
 
-The model was trained on 128 px chips, and EfficientNet's squeeze-excitation
-blocks average over the whole input. On large tiles of calm, dark sea that
-average shifts every feature and the model goes blind (2024-05-16, Fujairah:
-0 detections on 2048 px tiles, 128 on 128 px tiles), so it runs on tiles of
-the training size. INT8 dynamic quantisation is not used: it breaks the
-trained model (logits off by up to 8.8) and is slower on this CPU.
+EfficientNet's squeeze-excitation blocks average over the whole input, so
+the output depends on the tile size. On large tiles of calm, dark sea that
+average shifts every feature and the model goes blind (2024-05-16, Fujairah,
+kaggle-v1: 0 detections on 2048 px tiles, 128 on 128 px tiles), so it runs on
+small tiles. DEFAULT_TILE (128 px) is the chip size kaggle-v1 was trained on;
+kaggle-v2 was trained on random 96 px crops of those chips, and which tile
+size suits it has not been checked yet. INT8 dynamic quantisation is not used:
+it breaks the trained model (logits off by up to 8.8) and is slower on this CPU.
 """
 
 from __future__ import annotations
@@ -20,7 +22,7 @@ from core.inference.contract import normalise_chip
 from core.inference.decode import decode_peaks
 
 DEFAULT_THRESHOLD = 0.45  # chosen on validation for kaggle-v1 (epoch 6)
-DEFAULT_TILE = 128
+DEFAULT_TILE = 128  # kaggle-v1 training chips; not yet checked for kaggle-v2
 DEFAULT_OVERLAP = 32
 DETECTOR = "pointdet"
 
@@ -58,8 +60,11 @@ def run_tiled(
     """Objectness probabilities and offsets at half resolution over a whole window.
 
     Tiles overlap and are padded to a multiple of 32; where tiles overlap, the
-    more confident tile wins.
+    more confident tile wins. Tile starts must fall on output cells (even
+    pixels), so ``tile`` and ``tile - overlap`` must be even.
     """
+    if tile % 2 or (tile - overlap) % 2 or not 0 <= overlap < tile:
+        raise ValueError(f"tile {tile}, overlap {overlap}: need both even and 0 <= overlap < tile")
     _, height, width = image.shape
     out_h, out_w = (height + 1) // 2, (width + 1) // 2
     heat = np.zeros((out_h, out_w), dtype=np.float32)
