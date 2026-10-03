@@ -35,11 +35,14 @@ sys.path.insert(0, str(ROOT))
 
 
 from core.inference.runner import run_tiled  # noqa: E402
+from core.labeling.gfw import PASS_MARGIN  # noqa: E402
 
 CELL_DEG = 0.01
 MODEL_STORE_THRESHOLD = 0.05  # peaks kept for threshold sweeps
 MODEL_THRESHOLD = 0.45  # chosen on validation (kaggle-v1, epoch 6)
-# Inference tiles at the training chip size. EfficientNet's squeeze-excitation
+# 128 px tiles were chosen for run 1, which trained on 128 px chips; run 2
+# trained on random 96 px crops of them and a tile-size check for it is
+# still pending. Small tiles matter because EfficientNet's squeeze-excitation
 # blocks average over the whole input: on 2048 px tiles of calm, dark sea the
 # model went blind (0 peaks where 128 px tiles find 128; 2024-05-16 Fujairah).
 MODEL_TILE = 128
@@ -118,7 +121,14 @@ def test_pairs(index: Path) -> list[tuple[str, str]]:
 
 
 def spread(pairs: list[tuple[str, str]], per_area: int) -> list[tuple[str, str]]:
-    """Up to ``per_area`` passes per area, evenly spaced in time (chosen before any result)."""
+    """Up to ``per_area`` passes per area, spread evenly through its scenes in name order.
+
+    Scene names sort by acquisition time only within one satellite (all test
+    passes so far are S1A). With more than ``per_area`` scenes, index
+    ``int(i * len / per_area)`` is taken for each i, so the first scene is
+    always chosen and the last one or two may never be. Chosen before any
+    result; kept as is so later runs are compared on the same passes.
+    """
     chosen = []
     for area in sorted({a for a, _ in pairs}):
         scenes = sorted(s for a, s in pairs if a == area)
@@ -128,6 +138,40 @@ def spread(pairs: list[tuple[str, str]], per_area: int) -> list[tuple[str, str]]
         step = len(scenes) / per_area
         chosen += [(area, scenes[int(i * step)]) for i in range(per_area)]
     return chosen
+
+
+def gfw_days(acquired: dt.datetime) -> tuple[dt.date, dt.date]:
+    """UTC days [start, end) to fetch so every hour cells_for_pass keeps is included."""
+    first = (acquired - PASS_MARGIN).astimezone(dt.UTC).date()
+    last = (acquired + PASS_MARGIN).astimezone(dt.UTC).date()
+    return first, last + dt.timedelta(days=1)
+
+
+def unmasked(masked, row: float, col: float) -> bool:
+    """Whether a window-relative (row, col) rounds to an unmasked pixel inside the window.
+
+    The one test applied to CFAR candidates, model peaks and reference cells.
+    """
+    r, c = round(row), round(col)
+    return 0 <= r < masked.shape[0] and 0 <= c < masked.shape[1] and not masked[r, c]
+
+
+def reference_cells(cells, box, scene, offset, masked) -> tuple[list, int]:
+    """GFW cells in the box as (lon, lat, detections, matched), and the detections masked out.
+
+    ``scene.raster_coords`` is corner-based, so a cell centre is moved back half
+    a pixel before it is looked up in the window.
+    """
+    refs, dropped = [], 0
+    for cell in cells:
+        if not box.contains(cell.lon, cell.lat):
+            continue
+        rows, cols = scene.raster_coords([cell.lon], [cell.lat])
+        if not unmasked(masked, rows[0] - 0.5 - offset[0], cols[0] - 0.5 - offset[1]):
+            dropped += cell.detections
+            continue
+        refs.append((cell.lon, cell.lat, cell.detections, cell.matched))
+    return refs, dropped
 
 
 def compare_scene(area: str, scene_name: str, session, gfw_client) -> dict:
@@ -156,11 +200,14 @@ def compare_scene(area: str, scene_name: str, session, gfw_client) -> dict:
     offset = (window.row_off, window.col_off)
 
     config = CfarConfig(pfa=1e-6, satellite=product.satellite)
+    candidates = [
+        c
+        for c in detect_candidates(bands[1], config=config, mask=masked)
+        if unmasked(masked, c.row, c.col)
+    ]
     cfar = [
         (c.lon, c.lat)
-        for c in georeference(
-            detect_candidates(bands[1], config=config, mask=masked), scene, offset
-        )
+        for c in georeference(candidates, scene, offset)
         if box.contains(c.lon, c.lat)
     ]
 
@@ -171,9 +218,7 @@ def compare_scene(area: str, scene_name: str, session, gfw_client) -> dict:
     peaks = [
         (r, c, s)
         for r, c, s in decode_peaks(heat, off, threshold=MODEL_STORE_THRESHOLD)
-        if 0 <= round(r) < masked.shape[0]
-        and 0 <= round(c) < masked.shape[1]
-        and not masked[round(r), round(c)]
+        if unmasked(masked, r, c)
     ]
     model = []
     if peaks:
@@ -186,19 +231,10 @@ def compare_scene(area: str, scene_name: str, session, gfw_client) -> dict:
             if box.contains(float(x), float(y))
         ]
 
-    cells = asyncio.run(
-        fetch_sar_cells(gfw_client, box, day.date(), (day + dt.timedelta(days=1)).date())
+    cells = asyncio.run(fetch_sar_cells(gfw_client, box, *gfw_days(product.acq_start)))
+    refs, dropped = reference_cells(
+        cells_for_pass(cells, product.acq_start), box, scene, offset, masked
     )
-    refs, dropped = [], 0
-    for cell in cells_for_pass(cells, product.acq_start):
-        if not box.contains(cell.lon, cell.lat):
-            continue
-        rows, cols = scene.raster_coords([cell.lon], [cell.lat])
-        r, c = round(rows[0] - 0.5 - offset[0]), round(cols[0] - 0.5 - offset[1])
-        if not (0 <= r < masked.shape[0] and 0 <= c < masked.shape[1]) or masked[r, c]:
-            dropped += cell.detections
-            continue
-        refs.append((cell.lon, cell.lat, cell.detections, cell.matched))
     return {
         "area": area,
         "scene": scene_name,
@@ -335,6 +371,9 @@ def main() -> int:
             )
         if failed:
             print(f"{failed} passes failed; rerun to retry", flush=True)
+    if not args.out.is_dir() or not any(p.name != "summary.json" for p in args.out.glob("*.json")):
+        print(f"no results in {args.out}; nothing to summarise", flush=True)
+        return 1
     summary = summarise(args.out)
     (args.out / "summary.json").write_text(json.dumps(summary, indent=1), encoding="utf-8")
     for rule, areas in summary["table"].items():
