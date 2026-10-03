@@ -1825,18 +1825,23 @@ and with neighbouring cells allowed. Model threshold 0.45 (from validation).
 
 | Rule | Detector | Precision | Recall | F1 | Recall, AIS-matched | Recall, unmatched |
 |---|---|---|---|---|---|---|
-| same cell | CFAR | 0.710 | 0.918 | **0.800** | 0.931 | **0.775** |
-| same cell | model | 0.679 | 0.838 | **0.750** | 0.869 | **0.488** |
-| neighbours | CFAR | 0.748 | 0.968 | **0.844** | 0.981 | **0.891** |
-| neighbours | model | 0.730 | 0.901 | **0.807** | 0.935 | **0.628** |
+| same cell | CFAR | 0.710 | 0.918 | **0.800** | 0.930 | **0.771** |
+| same cell | model | 0.679 | 0.838 | **0.750** | 0.869 | **0.477** |
+| neighbours | CFAR | 0.748 | 0.968 | **0.844** | 0.979 | **0.837** |
+| neighbours | model | 0.730 | 0.901 | **0.807** | 0.932 | **0.535** |
 
-**Caveat (found after this entry was written): the two recall columns are
-optimistic.** `summarise()` scores the AIS-matched and unmatched subsets each
-against all predictions, so one prediction in a cell holding one of each
-counts as a hit in both. Precision, recall and F1 come from one joint
-assignment and stand. The subset recalls must be recomputed from a joint
-assignment before they are quoted; this work was also done under time
-pressure and is listed for review in `handoff.md` section 2.0.
+**Correction (2026-10-03): the two subset-recall columns were first
+published optimistic** (CFAR 0.931 / 0.775 and 0.981 / 0.891, model 0.869 /
+0.488 and 0.935 / 0.628). `summarise()` scored the AIS-matched and unmatched
+subsets each against all predictions, so one prediction could count as a hit
+in both, mostly through the neighbour rule. They now come from the same joint
+assignment as precision, recall and F1, which were right and are unchanged.
+GFW gives counts, not identities, so in the 13 of 1,575 reference cells
+holding both kinds a cell's hits are shared in proportion to their counts;
+any other choice moves unmatched recall by at most 0.012 (CFAR 0.767-0.775,
+model 0.465-0.488 same cell; model 0.527-0.543 neighbours). The neighbour
+pass is greedy: an optimal matching would add 1 hit for CFAR and 3 for the
+model out of about 1,600, so it is kept.
 
 By area (neighbours, F1 CFAR / model): Fujairah 0.866 / 0.820, Khor Fakkan
 0.819 / 0.792, Sharjah/Dubai 0.842 / 0.836, Ras Al Khaimah 0.834 / 0.727,
@@ -1846,9 +1851,15 @@ Hormuz lanes 0.854 / 0.740 (model recall 0.65 there). **Phase 5's done-when
 **Why: the label bias of section 8, now measured.** The model was trained to
 reproduce CFAR detections that GFW matched to AIS; every detection GFW saw but
 could not match was "ignore". It learned AIS-like vessels: on GFW detections
-without AIS its recall is 0.49 against CFAR's 0.78 (n = 129, so wide error
-bars), and it loses most where non-AIS traffic is common (Hormuz, Ras Al
-Khaimah). Both detectors' precision near 0.7 is partly GFW missing small
+without AIS its recall is 0.48 against CFAR's 0.77 (same cell; 0.54 against
+0.84 with neighbours), while on AIS-matched detections it trails CFAR by only
+0.06 (0.05). A bootstrap over the 40 passes puts CFAR's lead on unmatched
+detections at +0.30 (95% interval +0.16 to +0.43 same cell, +0.15 to +0.47
+neighbours) and on matched ones at +0.06 (+0.05 to +0.08). The gap is not
+uniform: it is largest where non-AIS traffic is common (Hormuz lanes 0.20
+against 0.76 same cell, n = 41; Ras Al Khaimah 0.16 against 0.45, n = 22), and
+nearly absent in Sharjah/Dubai (0.86 against 0.96, n = 52, about the matched
+gap there). Both detectors' precision near 0.7 is partly GFW missing small
 vessels, which this reference cannot separate from false alarms. The 0.937
 F1 on our own labels and this result are consistent: the model is good at
 the task it was given, and the task under-specifies dark vessels.

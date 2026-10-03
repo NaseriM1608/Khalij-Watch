@@ -59,21 +59,26 @@ def cell_key(lon: float, lat: float) -> tuple[int, int]:
     return round(lat / CELL_DEG), round(lon / CELL_DEG)
 
 
-def score_cells(
+def match_cells(
     preds: Sequence[tuple[float, float]],
     refs: Sequence[tuple[float, float, int]],
     *,
     neighbours: bool,
-) -> tuple[int, int, int]:
-    """(tp, fp, fn) of detections against per-cell reference counts."""
+) -> tuple[Counter, int]:
+    """Reference detections hit per cell, and the number of unmatched detections.
+
+    Same-cell matches are taken first; the neighbour pass is greedy (on the
+    kaggle-v1 comparison an optimal matching adds 1 hit for CFAR and 3 for the
+    model out of ~1,600).
+    """
     remaining = Counter()
     for lon, lat, count in refs:
         remaining[cell_key(lon, lat)] += count
     unmatched = Counter(cell_key(lon, lat) for lon, lat in preds)
-    tp = 0
+    hits = Counter()
     for key in list(unmatched):
         take = min(unmatched[key], remaining[key])
-        tp += take
+        hits[key] += take
         unmatched[key] -= take
         remaining[key] -= take
     if neighbours:
@@ -82,11 +87,23 @@ def score_cells(
                 for d_col in (-1, 0, 1):
                     other = (row + d_row, col + d_col)
                     take = min(left, remaining[other])
-                    tp += take
+                    hits[other] += take
                     left -= take
                     remaining[other] -= take
             unmatched[(row, col)] = left
-    return tp, sum(unmatched.values()), sum(remaining.values())
+    return hits, sum(unmatched.values())
+
+
+def score_cells(
+    preds: Sequence[tuple[float, float]],
+    refs: Sequence[tuple[float, float, int]],
+    *,
+    neighbours: bool,
+) -> tuple[int, int, int]:
+    """(tp, fp, fn) of detections against per-cell reference counts."""
+    hits, fp = match_cells(preds, refs, neighbours=neighbours)
+    tp = sum(hits.values())
+    return tp, fp, sum(count for _, _, count in refs) - tp
 
 
 def test_pairs(index: Path) -> list[tuple[str, str]]:
@@ -195,6 +212,28 @@ def compare_scene(area: str, scene_name: str, session, gfw_client) -> dict:
     }
 
 
+def split_hits(hits: Counter, refs: Sequence[tuple[float, float, int, bool]]) -> dict:
+    """Hits per AIS flag, from one joint assignment.
+
+    GFW gives counts per cell, not identities, so in a cell holding both
+    AIS-matched and unmatched detections a cell's hits are shared in proportion
+    to their counts; ``unmatched_min``/``_max`` bound what any choice would give.
+    """
+    per_cell: dict = {}
+    for lon, lat, count, matched in refs:
+        counts = per_cell.setdefault(cell_key(lon, lat), [0, 0])
+        counts[0 if matched else 1] += count
+    split = {"matched": 0.0, "unmatched": 0.0, "unmatched_min": 0, "unmatched_max": 0}
+    for key, (n_matched, n_unmatched) in per_cell.items():
+        hit = hits[key]
+        if hit:
+            split["matched"] += hit * n_matched / (n_matched + n_unmatched)
+            split["unmatched"] += hit * n_unmatched / (n_matched + n_unmatched)
+            split["unmatched_min"] += max(0, hit - n_matched)
+            split["unmatched_max"] += min(hit, n_unmatched)
+    return split
+
+
 def summarise(out: Path, threshold: float = MODEL_THRESHOLD) -> dict:
     """Precision, recall and F1 per detector, area and matching rule; recall on matched/unmatched."""
     results = [
@@ -208,20 +247,21 @@ def summarise(out: Path, threshold: float = MODEL_THRESHOLD) -> dict:
         for area in ["all", *sorted({r["area"] for r in results})]:
             rows = [r for r in results if area in ("all", r["area"])]
             for name in ("cfar", "model"):
-                tp = fp = fn = tp_m = n_m = tp_u = n_u = 0
+                tp = fp = n_m = n_u = 0
+                tp_m = tp_u = 0.0
+                tp_u_min = tp_u_max = 0
                 for r in rows:
                     preds = [(x[0], x[1]) for x in r[name] if name == "cfar" or x[2] >= threshold]
-                    refs = [(x[0], x[1], x[2]) for x in r["refs"]]
-                    a, b, c = score_cells(preds, refs, neighbours=neighbours)
-                    tp, fp, fn = tp + a, fp + b, fn + c
-                    for flag in (True, False):
-                        sub = [(x[0], x[1], x[2]) for x in r["refs"] if x[3] is flag]
-                        hit, _, _ = score_cells(preds, sub, neighbours=neighbours)
-                        total = sum(x[2] for x in sub)
-                        if flag:
-                            tp_m, n_m = tp_m + hit, n_m + total
-                        else:
-                            tp_u, n_u = tp_u + hit, n_u + total
+                    refs = [(x[0], x[1], x[2], x[3]) for x in r["refs"]]
+                    hits, wrong = match_cells(preds, [x[:3] for x in refs], neighbours=neighbours)
+                    split = split_hits(hits, refs)
+                    tp, fp = tp + sum(hits.values()), fp + wrong
+                    tp_m, tp_u = tp_m + split["matched"], tp_u + split["unmatched"]
+                    tp_u_min += split["unmatched_min"]
+                    tp_u_max += split["unmatched_max"]
+                    n_m += sum(x[2] for x in refs if x[3])
+                    n_u += sum(x[2] for x in refs if not x[3])
+                fn = n_m + n_u - tp
                 p, rc = tp / max(tp + fp, 1), tp / max(tp + fn, 1)
                 table.setdefault(rule, {}).setdefault(area, {})[name] = {
                     "precision": p,
@@ -230,8 +270,11 @@ def summarise(out: Path, threshold: float = MODEL_THRESHOLD) -> dict:
                     "tp": tp,
                     "fp": fp,
                     "fn": fn,
+                    "tp_ais_matched": tp_m,
+                    "tp_unmatched": tp_u,
                     "recall_ais_matched": tp_m / max(n_m, 1),
                     "recall_unmatched": tp_u / max(n_u, 1),
+                    "recall_unmatched_range": [tp_u_min / max(n_u, 1), tp_u_max / max(n_u, 1)],
                     "ref_matched": n_m,
                     "ref_unmatched": n_u,
                 }
@@ -300,9 +343,11 @@ def main() -> int:
         )
         for area, both in areas.items():
             for name, m in both.items():
+                low, high = m["recall_unmatched_range"]
                 print(
                     f"  {area:15s} {name:5s} P {m['precision']:.3f} R {m['recall']:.3f} F1 {m['f1']:.3f} "
-                    f"| recall AIS-matched {m['recall_ais_matched']:.3f} unmatched {m['recall_unmatched']:.3f}"
+                    f"| recall AIS-matched {m['recall_ais_matched']:.3f} unmatched {m['recall_unmatched']:.3f} "
+                    f"({low:.3f}-{high:.3f}, n {m['ref_unmatched']})"
                 )
     return 0
 
