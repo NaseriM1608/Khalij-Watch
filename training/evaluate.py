@@ -2,8 +2,8 @@
 
 Uses the same matching as training (core.inference.decode within
 ``TOLERANCE_PX``; predictions on ignored ground count neither way) so numbers
-are comparable with the training history, but lets the threshold grid reach
-lower and reports each area separately.
+are comparable with the training history, over the same threshold grid, and
+also reports each area separately.
 
 Run:
     python -m training.evaluate --checkpoint models/runs/kaggle-v1/run/best.pt \
@@ -19,6 +19,7 @@ from collections import defaultdict
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -67,7 +68,10 @@ def evaluate_checkpoint(
     model = load_model(Path(checkpoint)).to(device)
     records = load_index(Path(index), split)
     if max_chips:
-        records = records[:max_chips]
+        # A seeded random subset, as train.py takes max_val_chips: the index is ordered by area.
+        rng = np.random.default_rng(0)
+        keep = rng.choice(len(records), size=min(max_chips, len(records)), replace=False)
+        records = [records[i] for i in sorted(keep)]
     loader = DataLoader(
         ChipDataset(records, Path(root), augment=False),
         batch_size=batch_size,

@@ -103,6 +103,8 @@ class ChipDataset:
         self.crop = crop
         self._shards: OrderedDict[str, np.ndarray] = OrderedDict()
         self._draws = 0
+        # Set by the DataLoader's worker_init_fn, so workers do not repeat each other's draws.
+        self.worker: int | None = None
 
     def __len__(self) -> int:
         return len(self.records)
@@ -110,12 +112,17 @@ class ChipDataset:
     def __getitem__(self, i: int) -> dict[str, np.ndarray]:
         record = self.records[i]
         raw = self._chip(record["shard"], record["index"]).astype(np.float32)
-        rng = np.random.default_rng((self.seed, i, self._next_draw())) if self.augment else None
+        rng = None
+        if self.augment:
+            key = (self.seed, i, self._next_draw())
+            rng = np.random.default_rng(key if self.worker is None else (*key, self.worker))
         if rng is not None:
             raw = raw * rng.uniform(*GAIN_RANGE, size=(raw.shape[0], 1, 1)).astype(np.float32)
         image = normalise_chip(raw)
         if rng is not None:
-            image = image + rng.normal(0.0, NOISE_SIGMA, size=image.shape).astype(np.float32)
+            noise = rng.normal(0.0, NOISE_SIGMA, size=image.shape).astype(np.float32)
+            # Nodata stays exactly 0.0, as inference sees it.
+            image = np.where(raw == 0, 0.0, image + noise)
         targets = encode_targets(record)
         sample = {
             "image": image.astype(np.float32),

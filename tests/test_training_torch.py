@@ -178,6 +178,224 @@ def test_resume_refuses_a_changed_learning_rate_schedule():
         check_resumable({**saved, "epochs": 1}, config)
 
 
+def test_resume_refuses_a_changed_model_loss_or_crop():
+    """What is trained must match the checkpoint; housekeeping fields may change."""
+    from dataclasses import asdict, replace
+
+    from training.train import Config, check_resumable
+
+    config = Config(index="i", root="r", out="o", crop=96)
+    saved = asdict(config)
+
+    check_resumable(
+        {**saved, "keep_epochs": True, "workers": 0, "max_val_chips": 5, "out": "x"}, config
+    )
+    run_one = {k: v for k, v in saved.items() if k != "crop"}  # saved before crop existed
+    check_resumable(run_one, replace(config, crop=0))
+    for field, value in (
+        ("crop", 0),
+        ("objectness_loss", "bce"),
+        ("offset_weight", 2.0),
+        ("weight_decay", 0.0),
+        ("encoder", "resnet18"),
+    ):
+        with pytest.raises(ValueError, match=field):
+            check_resumable(asdict(replace(config, **{field: value})), config)
+
+
+def tiny_index(tmp_path, splits: dict[str, int]) -> None:
+    """index.jsonl and one shard: per split, chips numbered in order, area a<n>."""
+    import json
+
+    total = sum(splits.values())
+    chips = np.full((total, 2, CHIP_SIZE, CHIP_SIZE), 40, dtype=np.uint16)
+    chips[:, :, 62:66, 62:66] = 1500
+    (tmp_path / "shards").mkdir()
+    np.savez(tmp_path / "shards" / "S.npz", chips=chips, chip_ids=np.arange(total).astype(str))
+    records, n = [], 0
+    for split, count in splits.items():
+        for _ in range(count):
+            records.append(
+                {
+                    "chip_id": f"S/{n}",
+                    "area": f"a{n}",
+                    "scene": "S.SAFE",
+                    "split": split,
+                    "shard": "shards/S.npz",
+                    "index": n,
+                    "row": 1000.0,
+                    "col": 2000.0,
+                    "supervision": "positive",
+                    "source": "gfw",
+                    "objects": [],
+                }
+            )
+            n += 1
+    (tmp_path / "index.jsonl").write_text("".join(json.dumps(r) + "\n" for r in records))
+
+
+def tiny_config(tmp_path, **changes):
+    from training.train import Config
+
+    small = {"epochs": 2, "samples_per_epoch": 2, "batch_size": 2, "workers": 0}
+    return Config(
+        index=str(tmp_path / "index.jsonl"),
+        root=str(tmp_path),
+        out=str(tmp_path / "run"),
+        **{**small, **changes},
+    )
+
+
+def test_a_resumed_epoch_draws_a_new_sample_stream(tmp_path):
+    """Neither the sampler nor the augmentation may replay epoch 0 after a resume."""
+    from training.train import make_loaders
+
+    tiny_index(tmp_path, {"train": 40, "val": 1})
+    config = tiny_config(tmp_path, samples_per_epoch=64, epochs=4)
+
+    fresh, _, _ = make_loaders(config)
+    resumed, _, _ = make_loaders(config, start_epoch=3)
+
+    assert list(resumed.sampler) != list(fresh.sampler)
+    assert resumed.dataset.seed != fresh.dataset.seed
+
+
+def test_a_fresh_run_keeps_its_sample_stream(tmp_path):
+    from torch.utils.data import WeightedRandomSampler
+
+    from training.data import load_index, sampling_weight
+    from training.train import make_loaders
+
+    tiny_index(tmp_path, {"train": 40, "val": 1})
+    config = tiny_config(tmp_path, samples_per_epoch=64, seed=5)
+    records = load_index(tmp_path / "index.jsonl", "train")
+    before = WeightedRandomSampler(
+        [sampling_weight(r) for r in records],
+        num_samples=64,
+        replacement=True,
+        generator=torch.Generator().manual_seed(5),
+    )
+
+    fresh, _, _ = make_loaders(config)
+
+    assert list(fresh.sampler) == list(before)
+    assert fresh.dataset.seed == 5
+
+
+def test_each_loader_worker_gets_its_own_augmentation(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+
+    import training.train as train_module
+
+    tiny_index(tmp_path, {"train": 2, "val": 1})
+    loader, _, _ = train_module.make_loaders(tiny_config(tmp_path))
+    dataset = loader.dataset
+    monkeypatch.setattr(
+        train_module, "get_worker_info", lambda: SimpleNamespace(id=1, dataset=dataset)
+    )
+
+    loader.worker_init_fn(1)
+
+    assert dataset.worker == 1
+
+
+class Unpicklable:
+    def __reduce__(self):
+        raise RuntimeError("stopped mid-write")
+
+
+def test_atomic_save_leaves_the_old_file_when_a_write_fails(tmp_path):
+    from training.train import save_atomic
+
+    path = tmp_path / "last.pt"
+    save_atomic({"epoch": 1}, path)
+
+    with pytest.raises(RuntimeError, match="mid-write"):
+        save_atomic({"epoch": 2, "bad": Unpicklable()}, path)
+
+    assert torch.load(path, weights_only=False) == {"epoch": 1}
+
+
+def test_training_keeps_every_epoch_and_writes_last_after_the_others(monkeypatch, tmp_path):
+    """last.pt records the epoch as done, so it must be the final write of each epoch."""
+    from pathlib import Path
+
+    from training.export import load_model
+    from training.train import train
+
+    tiny_index(tmp_path, {"train": 2, "val": 1})
+    written = []
+    real_save = torch.save
+
+    def recording_save(obj, path, *args, **kwargs):
+        written.append(Path(path).name.removesuffix(".tmp"))
+        return real_save(obj, path, *args, **kwargs)
+
+    monkeypatch.setattr(torch, "save", recording_save)
+
+    train(tiny_config(tmp_path, keep_epochs=True))
+
+    run = tmp_path / "run"
+    assert written[0] == "epoch_00.pt" and written[-1] == "last.pt"
+    assert [i for i, name in enumerate(written) if name == "last.pt"] == [
+        written.index("epoch_01.pt") - 1,
+        len(written) - 1,
+    ]
+    for name in ("epoch_00.pt", "epoch_01.pt", "best.pt", "last.pt"):
+        load_model(run / name)
+    assert not list(run.glob("*.tmp"))
+    assert "scaler" in torch.load(run / "last.pt", weights_only=False)
+
+
+def test_resume_restores_the_scaler_and_accepts_checkpoints_without_it(monkeypatch, tmp_path):
+    """CPU runs keep the scaler disabled; old checkpoints have no scaler state at all."""
+    import shutil
+
+    import training.train as train_module
+
+    tiny_index(tmp_path, {"train": 2, "val": 1})
+    config = tiny_config(tmp_path)
+    last, after_first = tmp_path / "run" / "last.pt", tmp_path / "after_epoch_0.pt"
+    real_save = train_module.save_atomic
+
+    def keep_first_epoch(obj, path):
+        real_save(obj, path)
+        if path.name == "last.pt" and obj["epoch"] == 0:
+            shutil.copy(path, after_first)
+
+    monkeypatch.setattr(train_module, "save_atomic", keep_first_epoch)
+    train_module.train(config)
+
+    for drop_scaler in (True, False):
+        state = torch.load(after_first, weights_only=False)
+        if drop_scaler:
+            del state["scaler"]
+        torch.save(state, last)
+
+        metrics = train_module.train(config)
+
+        assert metrics["epoch"] == 1
+        assert "scaler" in torch.load(last, weights_only=False)
+
+
+def test_evaluate_max_chips_samples_like_training_validation(tmp_path):
+    """The index is ordered by area, so the first chips would all come from one area."""
+    from training.evaluate import evaluate_checkpoint
+
+    tiny_index(tmp_path, {"test": 10})
+    torch.save(
+        {"model": small_model().state_dict(), "config": {"encoder": "efficientnet_b0"}},
+        tmp_path / "m.pt",
+    )
+
+    report = evaluate_checkpoint(
+        tmp_path / "m.pt", tmp_path / "index.jsonl", tmp_path, split="test", max_chips=3
+    )
+
+    keep = sorted(np.random.default_rng(0).choice(10, size=3, replace=False))
+    assert set(report) - {"all"} == {f"a{i}" for i in keep}
+
+
 def test_onnx_export_matches_pytorch(tmp_path):
     pytest.importorskip("onnxruntime")
     from training.export import export_onnx, max_difference

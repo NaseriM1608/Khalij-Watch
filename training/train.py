@@ -22,7 +22,7 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from torch.utils.data import DataLoader, WeightedRandomSampler
+from torch.utils.data import DataLoader, WeightedRandomSampler, get_worker_info
 
 from core.inference.decode import decode_peaks, match_points
 from core.labeling.targets import output_position
@@ -59,7 +59,14 @@ class Config:
     keep_epochs: bool = False
 
 
-def make_loaders(config: Config) -> tuple[DataLoader, DataLoader, list[dict]]:
+def _seed_worker(_: int) -> None:
+    """Tell a worker's copy of the dataset its id, so workers draw different augmentations."""
+    info = get_worker_info()
+    info.dataset.worker = info.id
+
+
+def make_loaders(config: Config, start_epoch: int = 0) -> tuple[DataLoader, DataLoader, list[dict]]:
+    """Train and val loaders; a resumed run seeds its draws by its first epoch, not epoch 0's."""
     train_records = load_index(Path(config.index), "train")
     val_records = load_index(Path(config.index), "val")
     if config.max_val_chips:
@@ -68,22 +75,25 @@ def make_loaders(config: Config) -> tuple[DataLoader, DataLoader, list[dict]]:
             len(val_records), size=min(config.max_val_chips, len(val_records)), replace=False
         )
         val_records = [val_records[i] for i in sorted(keep)]
+    seed = config.seed + start_epoch
     sampler = WeightedRandomSampler(
         [sampling_weight(r) for r in train_records],
         num_samples=config.samples_per_epoch,
         replacement=True,
-        generator=torch.Generator().manual_seed(config.seed),
+        generator=torch.Generator().manual_seed(seed),
     )
     train = DataLoader(
-        ChipDataset(
-            train_records, Path(config.root), augment=True, seed=config.seed, crop=config.crop
-        ),
+        ChipDataset(train_records, Path(config.root), augment=True, seed=seed, crop=config.crop),
         batch_size=config.batch_size,
         sampler=sampler,
         num_workers=config.workers,
         persistent_workers=config.workers > 0,
         drop_last=True,
+        worker_init_fn=_seed_worker,
     )
+    # Whole 128 px chips centred on the detection, unlike the random crops trained on: best.pt
+    # (best F1 over THRESHOLDS here) is a rough guide; epochs are chosen against GFW on
+    # validation passes instead.
     val = DataLoader(
         ChipDataset(val_records, Path(config.root), augment=False),
         batch_size=config.batch_size,
@@ -168,20 +178,31 @@ def evaluate(model: PointDetector, loader: DataLoader, device: torch.device) -> 
 
 # Fields that fix OneCycleLR's total steps and shape; a checkpoint cannot follow others.
 _SCHEDULE_FIELDS = ("epochs", "samples_per_epoch", "batch_size", "lr")
+# Fields that change what is trained; a resumed run would mix two experiments.
+_TRAINING_FIELDS = ("crop", "objectness_loss", "offset_weight", "weight_decay", "encoder")
 
 
 def check_resumable(saved: dict, config: Config) -> None:
-    """Refuse to resume a run whose learning-rate schedule the new config would change."""
+    """Refuse to resume a run whose schedule, model, loss or crop the new config would change."""
+    # A field missing from an older checkpoint ran at its default (run 1 had no crop).
+    saved = {**{f.name: f.default for f in dataclasses.fields(Config)}, **saved}
     changed = [
         f"{field} {saved.get(field)} -> {getattr(config, field)}"
-        for field in _SCHEDULE_FIELDS
+        for field in _SCHEDULE_FIELDS + _TRAINING_FIELDS
         if saved.get(field) != getattr(config, field)
     ]
     if changed:
         raise ValueError(
             f"cannot resume {config.out}: {', '.join(changed)} would change the "
-            "learning-rate schedule; train into a new --out instead"
+            "learning-rate schedule or what is trained; train into a new --out instead"
         )
+
+
+def save_atomic(obj: dict, path: Path) -> None:
+    """torch.save through a temporary file, so a stop mid-write never leaves a broken file."""
+    partial = path.with_name(path.name + ".tmp")
+    torch.save(obj, partial)
+    partial.replace(path)
 
 
 def train(config: Config) -> dict[str, float]:
@@ -189,7 +210,12 @@ def train(config: Config) -> dict[str, float]:
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
     out = Path(config.out)
     out.mkdir(parents=True, exist_ok=True)
-    train_loader, val_loader, _ = make_loaders(config)
+    state = None
+    if (out / "last.pt").is_file():
+        state = torch.load(out / "last.pt", map_location=device, weights_only=False)
+        check_resumable(state["config"], config)
+    start = state["epoch"] + 1 if state else 0
+    train_loader, val_loader, _ = make_loaders(config, start)
 
     model = PointDetector(config.encoder, pretrained=config.pretrained).to(device)
     optimizer = torch.optim.AdamW(
@@ -198,14 +224,15 @@ def train(config: Config) -> dict[str, float]:
     steps = config.epochs * len(train_loader)
     scheduler = torch.optim.lr_scheduler.OneCycleLR(optimizer, max_lr=config.lr, total_steps=steps)
     scaler = torch.amp.GradScaler(enabled=device.type == "cuda")
-    start, best_f1, history = 0, -1.0, []
-    if (out / "last.pt").is_file():
-        state = torch.load(out / "last.pt", map_location=device, weights_only=False)
-        check_resumable(state["config"], config)
+    best_f1, history = -1.0, []
+    if state:
         model.load_state_dict(state["model"])
         optimizer.load_state_dict(state["optimizer"])
         scheduler.load_state_dict(state["scheduler"])
-        start, best_f1, history = state["epoch"] + 1, state["best_f1"], state["history"]
+        # Older checkpoints have no scaler state; CPU runs save an empty one.
+        if state.get("scaler"):
+            scaler.load_state_dict(state["scaler"])
+        best_f1, history = state["best_f1"], state["history"]
         print(f"resumed after epoch {state['epoch']}", flush=True)
 
     for epoch in range(start, config.epochs):
@@ -233,22 +260,24 @@ def train(config: Config) -> dict[str, float]:
             "model": model.state_dict(),
             "optimizer": optimizer.state_dict(),
             "scheduler": scheduler.state_dict(),
+            "scaler": scaler.state_dict(),
             "epoch": epoch,
             "best_f1": best_f1,
             "history": history,
             "config": asdict(config),
         }
-        torch.save(state, out / "last.pt")
+        # last.pt marks the epoch done, so it is written after the files it vouches for.
         if config.keep_epochs:
-            torch.save(
+            save_atomic(
                 {"model": model.state_dict(), "config": asdict(config), "metrics": metrics},
                 out / f"epoch_{epoch:02d}.pt",
             )
         if metrics["f1"] >= best_f1:
-            torch.save(
+            save_atomic(
                 {"model": model.state_dict(), "config": asdict(config), "metrics": metrics},
                 out / "best.pt",
             )
+        save_atomic(state, out / "last.pt")
     (out / "history.json").write_text(json.dumps(history, indent=1), encoding="utf-8")
     return history[-1] if history else {}
 
