@@ -1869,3 +1869,82 @@ AIS (`gfw_unmatched`) positives instead of ignored; add translation jitter so
 positives are not always at the chip centre; keep 128 px inference; select
 the checkpoint on this GFW comparison over validation passes, not on our own
 labels; re-run this comparison on all 92 test passes.
+
+### 2026-10-04 - Run 2: dark vessels as positives; the model now edges CFAR
+
+**Run 2 (`kaggle-v2`).** Run 1's recipe with three changes: the 1,603
+training detections GFW saw without AIS (`gfw_unmatched`) became positives
+(run 1 ignored them); random 96 px crops of the 128 px chips, so vessels are
+not always centred; weights kept every epoch. Tesla T4, 15 epochs of about
+8.6 minutes. Validation F1 on our own labels rose to 0.97-0.975 from epoch 4
+on, with no late collapse; it now counts `gfw_unmatched` as positive, so it
+is not comparable with run 1's 0.910.
+
+**The new positives look like vessels.** In a sheet of 64 random training
+`gfw_unmatched` chips, about 57 are compact, ship-shaped returns (several
+smeared like moving ships) and about 7 are small faint points, 5-8 dB above
+the sea in VH, that may be small boats; none look like land, coast or bare
+wakes. They are smaller and fainter than AIS-matched positives (median CFAR
+length 143 m against 181 m). This is a visual judgement, not a measured
+label precision.
+
+**Choosing the checkpoint against GFW on validation.**
+`scripts/compare_cfar_model.py` now reads each pass once and runs several
+models on it, recording each model's weights (sha256) and tiling so runs
+cannot be mixed, and adds a threshold sweep and a paired bootstrap over
+passes. On 25 validation passes (5 per area) it scored 13 configurations of
+runs 1 and 2:
+- Tile size matters again, in the other direction from run 1's blindness on
+  2048 px tiles: 256 px tiles beat 128 px for run 2 (and run 2.5 times
+  faster); the 96 px training crop was worst. Small tiles double the
+  near-duplicate peaks: 8-12% of detections lie within 100 m of another from
+  the same configuration, against about 4% with 256 px tiles (CFAR 1.3%).
+  Tile seams split one vessel's response into two maxima.
+- Longer training costs dark vessels: at 128 px, neighbour recall on
+  GFW-unmatched detections fell from 0.85 (epoch 5) to 0.68 (epoch 14); at
+  256/64 epoch 5 also scored best (mean F1 0.848 against 0.835 for epoch 14).
+- The selection rule was agreed with the user before any test number. The
+  first, neighbour F1 only, picked a threshold at which the model was below
+  CFAR on the same-cell rule, so it was amended, still before test, to the
+  mean of same-cell and neighbour F1, matching Phase 5's "better under both
+  rules": run 2 epoch 5, 256 px tiles with 64 px overlap, threshold 0.60
+  (validation mean F1 0.846 against CFAR's 0.829; optimistic, since chosen on
+  those passes). Two validation runs agreed exactly on CFAR, GFW and the
+  configuration they shared.
+
+**Held-out test: the same 40 passes as run 1, all three detectors in one
+run.** CFAR and run 1 reproduce their 2026-10-01 counts exactly.
+
+| Rule | Detector | Precision | Recall | F1 | Recall, AIS-matched | Recall, unmatched |
+|---|---|---|---|---|---|---|
+| same cell | CFAR | 0.710 | 0.918 | 0.800 | 0.930 | 0.771 |
+| same cell | run 1 | 0.679 | 0.838 | 0.750 | 0.869 | 0.477 |
+| same cell | run 2 | 0.720 | 0.931 | **0.812** | 0.943 | 0.787 |
+| neighbours | CFAR | 0.748 | 0.968 | 0.844 | 0.979 | 0.837 |
+| neighbours | run 1 | 0.730 | 0.901 | 0.807 | 0.932 | 0.535 |
+| neighbours | run 2 | 0.756 | 0.978 | **0.853** | 0.990 | 0.829 |
+
+Run 2 minus CFAR, 95% intervals from resampling passes: F1 +0.012 (-0.000
+to +0.026) same cell, +0.009 (-0.003 to +0.022) neighbours; recall on
+AIS-matched detections +0.013 (+0.004 to +0.023); recall on unmatched
+detections +0.016 (-0.10 to +0.12) and -0.008 (-0.14 to +0.10). Run 1 minus
+CFAR: F1 -0.050 (-0.072 to -0.029) and -0.038 (-0.059 to -0.016).
+
+**Phase 5's done-when is met under the criterion agreed with the user, but
+not significantly:** run 2's F1 exceeds CFAR's under both rules on held-out
+passes, and both intervals include zero. The label-bias fix worked: recall on
+detections without AIS went from 0.48 (run 1) to 0.79, level with CFAR's
+0.77. By area (neighbours, CFAR / run 2): Hormuz lanes 0.854 / 0.902 and Ras
+Al Khaimah 0.834 / 0.900, where non-AIS traffic is common and run 2 also has
+far fewer false alarms; Sharjah/Dubai 0.842 / 0.858; Fujairah 0.866 / 0.872;
+Khor Fakkan 0.819 / 0.798 (25 more false alarms). It takes about 10 s per
+20 km box on this laptop.
+
+Limits: 40 of 92 test passes; GFW is not ground truth, and precision near
+0.75 for every detector mixes false alarms with vessels GFW missed; small
+tiles' duplicate peaks are reduced, not removed (2.8% within 100 m at the
+chosen setting). The code-review fixes of 2026-10-03/04
+(`8d71fae`..`89acf8b`) changed none of the numbers above; runs 1 and 2 were
+trained with two small label bugs since fixed (a half-pixel target offset on
+1.8% of positives, and ignore discs that a later negative disc could
+override).
