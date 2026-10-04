@@ -6,6 +6,7 @@ import datetime as dt
 import json
 import sys
 from collections import Counter
+from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
@@ -302,7 +303,7 @@ def test_spread_picks_the_same_scene_indices_as_run_1(count, indices):
     assert chosen == [("fujairah", names[i]) for i in indices]
 
 
-def test_test_pairs_keeps_only_test_records_deduplicated_and_sorted(tmp_path):
+def test_split_pairs_keeps_only_that_split_deduplicated_and_sorted(tmp_path):
     records = [
         {"split": "test", "area": "b", "scene": "S2"},
         {"split": "test", "area": "a", "scene": "S9"},
@@ -313,7 +314,8 @@ def test_test_pairs_keeps_only_test_records_deduplicated_and_sorted(tmp_path):
     index = tmp_path / "index.jsonl"
     index.write_text("".join(json.dumps(r) + "\n" for r in records), encoding="utf-8")
 
-    assert compare.test_pairs(index) == [("a", "S9"), ("b", "S2")]
+    assert compare.split_pairs(index, "test") == [("a", "S9"), ("b", "S2")]
+    assert compare.split_pairs(index, "val") == [("a", "S1")]
 
 
 def test_scoring_with_no_predictions_misses_every_reference():
@@ -397,33 +399,53 @@ def test_summarise_counts_a_model_score_exactly_at_the_threshold(tmp_path):
     assert (model["tp"], model["fp"], model["fn"]) == (1, 0, 0)
 
 
-def test_main_skips_passes_already_compared_and_writes_new_ones(tmp_path, monkeypatch):
+class GfwError(Exception):
+    pass
+
+
+@pytest.fixture
+def offline_main(tmp_path, monkeypatch):
+    """main() with the index, model files, GFW, ONNX and compare_scene replaced by fakes."""
     import core.config
 
-    done, new = (
+    scenes = [
         "S1A_IW_GRDH_1SDV_20240516T021200_A.SAFE",
         "S1A_IW_GRDH_1SDV_20240528T021200_B_COG.SAFE",
-    )
+    ]
     index = tmp_path / "index.jsonl"
     index.write_text(
         "".join(
-            json.dumps({"split": "test", "area": "fujairah", "scene": s}) + "\n"
-            for s in (done, new)
+            json.dumps({"split": "val", "area": "fujairah", "scene": s}) + "\n" for s in scenes
         ),
         encoding="utf-8",
     )
-    out = tmp_path / "out"
-    out.mkdir()
-    write_pass(out, done.removesuffix(".SAFE"), refs=[[56.50, 25.20, 1, True]])
-    compared = []
+    models = {}
+    for name in ("a", "b"):
+        models[name] = tmp_path / f"{name}.onnx"
+        models[name].write_bytes(name.encode())
+    state = SimpleNamespace(
+        index=index,
+        out=tmp_path / "out",
+        scenes=scenes,
+        models=models,
+        compared=[],
+        fail=set(),
+        error=GfwError("GFW said no"),
+    )
+    state.out.mkdir()
 
-    def fake_compare_scene(area, scene_name, session, client):
-        compared.append((area, scene_name, session, client))
+    def fake_compare_scene(area, scene_name, loaded, _client):
+        if scene_name in state.fail:
+            raise state.error
+        state.compared.append((scene_name, [(spec.label, session) for spec, _, session in loaded]))
         return {
             "area": area,
             "scene": scene_name,
             "cfar": [[56.50, 25.20]],
-            "model": [],
+            "models": {
+                spec.label: {**prov, "peaks": [[56.50, 25.20, 0.9]], "seconds": 0.1}
+                for spec, prov, _ in loaded
+            },
             "refs": [[56.50, 25.20, 1, True]],
             "seconds": 0.1,
         }
@@ -431,15 +453,269 @@ def test_main_skips_passes_already_compared_and_writes_new_ones(tmp_path, monkey
     monkeypatch.setattr(compare, "compare_scene", fake_compare_scene)
     monkeypatch.setitem(sys.modules, "gfwapiclient", SimpleNamespace(Client=lambda **_: "client"))
     monkeypatch.setitem(
+        sys.modules, "gfwapiclient.exceptions", SimpleNamespace(GFWAPIClientError=GfwError)
+    )
+    monkeypatch.setitem(
         sys.modules,
         "onnxruntime",
-        SimpleNamespace(InferenceSession=lambda *_, **__: "session"),
+        SimpleNamespace(InferenceSession=lambda path, **__: f"session:{Path(path).name}"),
     )
     monkeypatch.setattr(core.config, "load_settings", lambda: None)
     monkeypatch.setenv("GFW_API_TOKEN", "not-a-token")
-    monkeypatch.setattr(sys, "argv", ["compare", "--index", str(index), "--out", str(out)])
 
-    assert compare.main() == 0
-    assert compared == [("fujairah", new, "session", "client")]
-    assert (out / "fujairah__S1A_IW_GRDH_1SDV_20240528T021200_B_COG.json").exists()
-    assert json.loads((out / "summary.json").read_text(encoding="utf-8"))["scenes"] == 2
+    def run(*extra):
+        argv = ["compare", "--index", str(index), "--out", str(state.out), "--split", "val"]
+        monkeypatch.setattr(sys, "argv", [*argv, *extra])
+        return compare.main()
+
+    state.run = run
+    return state
+
+
+def test_main_runs_every_model_on_each_pass_once(offline_main):
+    m = offline_main
+
+    assert m.run("--model", f"a={m.models['a']}", "--model", f"b={m.models['b']}@256/64") == 0
+
+    assert [scene for scene, _ in m.compared] == m.scenes
+    assert m.compared[0][1] == [("a", "session:a.onnx"), ("b", "session:b.onnx")]
+    result = json.loads(
+        (m.out / "fujairah__S1A_IW_GRDH_1SDV_20240528T021200_B_COG.json").read_text()
+    )
+    assert result["split"] == "val"
+    assert (result["models"]["b"]["tile"], result["models"]["b"]["overlap"]) == (256, 64)
+    summary = json.loads((m.out / "summary.json").read_text(encoding="utf-8"))
+    assert summary["scenes"] == 2
+    assert set(summary["table"]["same_cell"]["all"]) == {"cfar", "a", "b"}
+
+
+def test_main_resumes_only_passes_compared_with_the_same_models(offline_main):
+    m = offline_main
+    assert m.run("--model", f"a={m.models['a']}") == 0
+    m.compared.clear()
+
+    assert m.run("--model", f"a={m.models['a']}") == 0
+    assert m.compared == []
+
+    m.models["a"].write_bytes(b"retrained weights")
+    assert m.run("--model", f"a={m.models['a']}") == 0
+    assert [scene for scene, _ in m.compared] == m.scenes
+
+
+def test_main_treats_a_gfw_error_as_one_failed_pass(offline_main, capsys):
+    m = offline_main
+    m.fail.add(m.scenes[0])
+
+    assert m.run("--model", f"a={m.models['a']}") == 0
+
+    assert [scene for scene, _ in m.compared] == [m.scenes[1]]
+    assert "1 passes failed" in capsys.readouterr().out
+
+
+def test_main_treats_a_catalogue_outage_as_one_failed_pass(offline_main, capsys):
+    from core.sar.catalogue import CatalogueError
+
+    m = offline_main
+    m.fail.add(m.scenes[0])
+    m.error = CatalogueError("catalogue unreachable")
+
+    assert m.run("--model", f"a={m.models['a']}") == 0
+
+    assert [scene for scene, _ in m.compared] == [m.scenes[1]]
+    assert "1 passes failed" in capsys.readouterr().out
+
+
+def test_main_redoes_a_pass_whose_result_was_cut_short(offline_main):
+    m = offline_main
+    assert m.run("--model", f"a={m.models['a']}") == 0
+    broken = m.out / "fujairah__S1A_IW_GRDH_1SDV_20240516T021200_A.json"
+    broken.write_bytes(b"\0\0\0\0")  # what a power cut can leave behind
+    m.compared.clear()
+
+    assert m.run("--model", f"a={m.models['a']}") == 0
+
+    assert [scene for scene, _ in m.compared] == [m.scenes[0]]
+    assert compare.load_result(broken)["models"]["a"]["tile"] == 128
+
+
+def test_summary_totals_each_models_seconds_over_passes(offline_main):
+    m = offline_main
+
+    assert m.run("--model", f"a={m.models['a']}") == 0
+
+    summary = json.loads((m.out / "summary.json").read_text(encoding="utf-8"))
+    assert summary["models"]["a"]["seconds_total"] == pytest.approx(0.2)
+    assert "seconds" not in summary["models"]["a"]
+
+
+def test_summarise_refuses_a_threshold_for_an_unknown_model(tmp_path):
+    write_result(tmp_path, "s1", models={"a": ("x", 128, [])}, refs=[[56.50, 25.20, 1, True]])
+
+    with pytest.raises(ValueError, match="e_14"):
+        summarise(tmp_path, thresholds={"e_14": 0.3})
+
+
+def test_bootstrap_states_the_threshold_it_was_computed_at(tmp_path):
+    write_result(tmp_path, "s1", models={"a": ("x", 128, [])}, refs=[[56.50, 25.20, 1, True]])
+
+    summary = summarise(tmp_path, thresholds={"a": 0.3}, resamples=10)
+
+    assert summary["bootstrap"]["a"]["same_cell"]["threshold"] == pytest.approx(0.3)
+
+
+def test_parse_model_spec_reads_label_path_and_tiling():
+    spec = compare.parse_model_spec(r"e14=E:\runs\epoch_14.onnx@256/64")
+
+    assert (spec.label, spec.path, spec.tile, spec.overlap) == (
+        "e14",
+        Path(r"E:\runs\epoch_14.onnx"),
+        256,
+        64,
+    )
+    plain = compare.parse_model_spec("models/x.onnx")
+    assert (plain.label, plain.tile, plain.overlap) == ("model", 128, 32)
+
+
+@pytest.mark.parametrize(
+    "text", ["a=x.onnx@256", "a=x.onnx@256/x", "a=x.onnx@128/31", "cfar=x.onnx", "=x.onnx"]
+)
+def test_parse_model_spec_refuses_bad_specs(text):
+    with pytest.raises(ValueError):
+        compare.parse_model_spec(text)
+
+
+def write_result(folder, scene, *, models, refs, cfar=(), area="fujairah"):
+    """A result in the several-models format; ``models`` maps label -> (sha, tile, peaks)."""
+    record = {
+        "area": area,
+        "scene": scene,
+        "split": "val",
+        "cfar": list(cfar),
+        "models": {
+            label: {"path": f"{label}.onnx", "sha256": sha, "tile": tile, "overlap": 32, "peaks": p}
+            for label, (sha, tile, p) in models.items()
+        },
+        "refs": refs,
+    }
+    (folder / f"{area}__{scene}.json").write_text(json.dumps(record), encoding="utf-8")
+
+
+def test_summarise_scores_each_model_at_its_own_threshold(tmp_path):
+    refs = [[56.50, 25.20, 1, True], [56.60, 25.30, 1, False]]
+    peaks = [[56.50, 25.20, 0.9], [56.60, 25.30, 0.6]]
+    write_result(tmp_path, "s1", models={"a": ("x", 128, peaks), "b": ("y", 256, peaks)}, refs=refs)
+
+    table = summarise(tmp_path, thresholds={"b": 0.8})["table"]["same_cell"]["all"]
+
+    assert table["a"]["tp"] == 2
+    assert (table["b"]["tp"], table["b"]["fn"]) == (1, 1)
+    assert table["cfar"]["fn"] == 2
+
+
+def test_summarise_refuses_a_folder_mixing_different_models(tmp_path):
+    refs = [[56.50, 25.20, 1, True]]
+    write_result(tmp_path, "s1", models={"a": ("x", 128, [])}, refs=refs)
+    write_result(tmp_path, "s2", models={"a": ("other weights", 128, [])}, refs=refs)
+
+    with pytest.raises(ValueError, match="other models"):
+        summarise(tmp_path)
+
+
+def test_summarise_refuses_passes_with_different_model_labels(tmp_path):
+    refs = [[56.50, 25.20, 1, True]]
+    write_result(tmp_path, "s1", models={"a": ("x", 128, [])}, refs=refs)
+    write_result(tmp_path, "s2", models={"a": ("x", 128, []), "b": ("y", 128, [])}, refs=refs)
+
+    with pytest.raises(ValueError, match="other models"):
+        summarise(tmp_path)
+
+
+def test_results_written_before_several_models_read_as_one_model_called_model(tmp_path):
+    write_pass(tmp_path, "s1", refs=[[56.50, 25.20, 1, True]], model=[[56.50, 25.20, 0.9]])
+
+    result = compare.load_result(tmp_path / "fujairah__s1.json")
+
+    assert list(result["models"]) == ["model"]
+    assert result["models"]["model"]["peaks"] == [[56.50, 25.20, 0.9]]
+    assert result["models"]["model"]["sha256"] is None
+
+
+def test_threshold_sweep_finds_the_threshold_with_the_best_f1(tmp_path):
+    refs = [[56.50, 25.20, 1, True], [56.60, 25.30, 1, True]]
+    peaks = [[56.50, 25.20, 0.9], [56.60, 25.30, 0.7], [56.70, 25.40, 0.3], [56.80, 25.50, 0.2]]
+    write_result(tmp_path, "s1", models={"a": ("x", 128, peaks)}, refs=refs)
+
+    sweep = summarise(tmp_path)["sweep"]["a"]["same_cell"]
+
+    assert sweep["best_threshold"] == pytest.approx(0.35)
+    assert sweep["best_f1"] == pytest.approx(1.0)
+    assert sweep["by_threshold"]["0.25"]["f1"] == pytest.approx(0.8)
+
+
+def test_bootstrap_of_identical_detectors_is_zero(tmp_path):
+    for i in range(3):
+        refs = [[56.50 + i, 25.20, 2, True], [56.60 + i, 25.30, 1, False]]
+        write_result(
+            tmp_path,
+            f"s{i}",
+            models={"a": ("x", 128, [[56.50 + i, 25.20, 0.9]])},
+            refs=refs,
+            cfar=[[56.50 + i, 25.20]],
+        )
+
+    boot = summarise(tmp_path, resamples=200)["bootstrap"]["a"]["neighbour_cells"]
+
+    assert boot["f1"]["diff"] == pytest.approx(0.0)
+    assert boot["f1"]["ci95"] == pytest.approx([0.0, 0.0])
+    assert boot["recall_unmatched"]["diff"] == pytest.approx(0.0)
+
+
+def test_bootstrap_difference_is_model_minus_cfar_with_an_interval_around_it(tmp_path):
+    for i in range(8):
+        refs = [[56.50 + i, 25.20, 1, True], [56.60 + i, 25.30, 1, False]]
+        model = [[56.50 + i, 25.20, 0.9], [56.60 + i, 25.30, 0.9]]
+        cfar = [[56.50 + i, 25.20]] if i % 2 else [[56.50 + i, 25.20], [56.60 + i, 25.30]]
+        write_result(tmp_path, f"s{i}", models={"a": ("x", 128, model)}, refs=refs, cfar=cfar)
+
+    boot = summarise(tmp_path, resamples=500)["bootstrap"]["a"]["same_cell"]
+
+    # Model finds all 8 unmatched, CFAR 4 of 8: recall difference +0.5.
+    assert boot["recall_unmatched"]["diff"] == pytest.approx(0.5)
+    low, high = boot["recall_unmatched"]["ci95"]
+    assert 0.0 < low <= 0.5 <= high <= 1.0
+    assert boot["recall_ais_matched"]["diff"] == pytest.approx(0.0)
+
+
+class FakeSession:
+    """Stride-2 output with one bright cell per bright input pixel, as the trained model encodes."""
+
+    def run(self, _names, feeds):
+        image = feeds["image"]
+        _, _, h, w = image.shape
+        heat = np.full((1, 1, h // 2, w // 2), -10.0, dtype=np.float32)
+        heat[0, 0] = np.where(image[0, 0, ::2, ::2] > 0.5, 10.0, -10.0)
+        return heat, np.full((1, 2, h // 2, w // 2), -0.25, dtype=np.float32)
+
+
+class OffsetScene:
+    """lonlat = (col / 100, row / 100): scene pixel (row, col) -> lon col/100, lat row/100."""
+
+    def lonlat(self, rows, cols):
+        return np.asarray(cols) / 100.0, np.asarray(rows) / 100.0
+
+
+def test_model_peaks_are_unmasked_inside_the_box_and_offset_by_the_window():
+    image = np.zeros((2, 64, 64), dtype=np.float32)
+    image[0, 10, 20] = image[0, 40, 40] = image[0, 50, 6] = 1.0
+    masked = np.zeros((64, 64), dtype=bool)
+    masked[40, 40] = True  # a masked target
+    box = BBox(0.0, 0.0, 1.0, 0.45)  # the target at window row 50 lies at lat 0.5, outside
+
+    peaks = compare.model_peaks(
+        FakeSession(), image, masked, OffsetScene(), (0, 30), box, tile=64, overlap=0
+    )
+
+    # Cell (5, 10) with offset -0.25 decodes to (2 * 4.75 + 0.5, 2 * 9.75 + 0.5) = (10, 20);
+    # scene column 20 + 30 -> lon 0.5, row 10 -> lat 0.1.
+    assert [(round(lon, 4), round(lat, 4)) for lon, lat, _ in peaks] == [(0.5, 0.1)]
+    assert peaks[0][2] > 0.99

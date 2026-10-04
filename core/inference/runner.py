@@ -50,6 +50,12 @@ def _starts(size: int, tile: int, step: int) -> list[int]:
     return starts
 
 
+def check_tiling(tile: int, overlap: int) -> None:
+    """Tile starts must fall on output cells (even pixels): ``tile`` and ``tile - overlap`` even."""
+    if tile % 2 or (tile - overlap) % 2 or not 0 <= overlap < tile:
+        raise ValueError(f"tile {tile}, overlap {overlap}: need both even and 0 <= overlap < tile")
+
+
 def run_tiled(
     predict: Callable[[np.ndarray], tuple[np.ndarray, np.ndarray]],
     image: np.ndarray,
@@ -60,11 +66,9 @@ def run_tiled(
     """Objectness probabilities and offsets at half resolution over a whole window.
 
     Tiles overlap and are padded to a multiple of 32; where tiles overlap, the
-    more confident tile wins. Tile starts must fall on output cells (even
-    pixels), so ``tile`` and ``tile - overlap`` must be even.
+    more confident tile wins. See check_tiling for the tile sizes allowed.
     """
-    if tile % 2 or (tile - overlap) % 2 or not 0 <= overlap < tile:
-        raise ValueError(f"tile {tile}, overlap {overlap}: need both even and 0 <= overlap < tile")
+    check_tiling(tile, overlap)
     _, height, width = image.shape
     out_h, out_w = (height + 1) // 2, (width + 1) // 2
     heat = np.zeros((out_h, out_w), dtype=np.float32)
