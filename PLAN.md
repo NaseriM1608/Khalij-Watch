@@ -1970,3 +1970,45 @@ outside its interval.
 (the model's where it ran, CFAR's elsewhere), so the map no longer counts
 vessels twice. Training and evaluation used S1A passes only; the product
 also runs on S1C and S1D, which is untested.
+
+### 2026-10-04 - Sentinel-1C/1D check: the product model holds
+
+Runs 1 and 2 were trained and tested on Sentinel-1A passes of 2024-2025,
+but the product now runs on Sentinel-1C and 1D (S1A retired in June 2026).
+The frozen product configuration (run 2 epoch 5, 256/64 tiles, threshold
+0.60) and CFAR were scored against GFW on every S1C/S1D pass over the five
+boxes since GFW's recalibration for those satellites (2026-09-08 to 09-29,
+47 area-passes, none seen before), and on an S1A control from January-June
+2026 (25 area-passes, 5 left out because GFW reported nothing there: the
+acquisitions of 2026-04-21 and 05-27). `compare_cfar_model.py --pairs`
+compares listed passes, leaves out passes without GFW detections in the box,
+and records each pass's median sea amplitude.
+
+| Passes | GFW detections (without AIS) | CFAR per GFW detection | F1 same cell, CFAR / run 2 | F1 neighbours, CFAR / run 2 | Run 2 - CFAR, same cell |
+|---|---|---|---|---|---|
+| S1A 2024-25 test (92) | 3,900 (6%) | 1.29 | 0.808 / 0.817 | 0.848 / 0.854 | +0.009 (+0.002 to +0.016) |
+| S1A 2026 Jan-Jun (20) | 854 (26%) | 1.23 | 0.833 / 0.827 | 0.874 / 0.869 | -0.006 (-0.022 to +0.008) |
+| S1C/S1D 2026-09 (47) | 1,899 (43%) | 1.58 | 0.718 / 0.721 | 0.753 / 0.758 | +0.003 (-0.006 to +0.014) |
+
+- **No calibration shift.** Median sea amplitude on S1C (VV 61, VH 28 DN)
+  and S1D (56, 28) lies inside the S1A range (per-area medians of 2024-25
+  sea chips: VV 58-72, VH 29-39; S1A 2026: 58, 39), so the model's frozen
+  input normalisation sees the same sea.
+- **The model works on S1C/S1D, level with CFAR.** On 2026 data, with
+  either satellite, run 2 and CFAR are tied within about 0.015; the small
+  2024-25 advantage is not reproduced in 2026.
+- **Both detectors lose about 0.1 F1 against GFW on S1C/S1D, together.**
+  They find 1.58 objects per GFW detection there, against about 1.25 on
+  S1A in both years, and a visual check of an S1C pass (Fujairah, 2026-09-25)
+  shows clear ships without a GFW cell: GFW's recalibrated S1C/S1D reference
+  is thinner, so absolute scores against GFW are not comparable across
+  satellites.
+- **CFAR fires on S1C's azimuth streaks; the model does not.** On that pass,
+  bright vertical streaks along azimuth carry chains of CFAR detections on
+  empty water. CFAR detections with no model detection within 100 m: S1C
+  10.1%, S1D 6.1%, S1A 4-6%; model detections with no CFAR within 100 m:
+  3.4% on S1C/S1D.
+
+No recalibration is needed; run 2 stays the product model. The share of GFW
+detections without AIS rose from 6% (2024-25) to 26% (early 2026) and 43%
+(September 2026).
