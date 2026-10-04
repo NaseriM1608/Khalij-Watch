@@ -200,6 +200,24 @@ def split_pairs(index: Path, split: str) -> list[tuple[str, str]]:
     return sorted(pairs)
 
 
+def read_pairs(path: Path) -> list[tuple[str, str]]:
+    """(area, scene) pairs from a text file, one "area scene" per line; # starts a comment.
+
+    For passes outside the dataset index, such as Sentinel-1C/1D passes after
+    GFW's recalibration in September 2026.
+    """
+    pairs = []
+    for line in path.read_text(encoding="utf-8").splitlines():
+        line = line.split("#", 1)[0].strip()
+        if not line:
+            continue
+        area, scene = line.split()
+        if area not in AREAS:
+            raise ValueError(f"unknown area {area!r} in {path}")
+        pairs.append((area, scene))
+    return pairs
+
+
 def spread(pairs: list[tuple[str, str]], per_area: int) -> list[tuple[str, str]]:
     """Up to ``per_area`` passes per area, spread evenly through its scenes in name order.
 
@@ -234,6 +252,16 @@ def unmasked(masked, row: float, col: float) -> bool:
     """
     r, c = round(row), round(col)
     return 0 <= r < masked.shape[0] and 0 <= c < masked.shape[1] and not masked[r, c]
+
+
+def sea_levels(bands, masked) -> list[float]:
+    """Median VV and VH amplitude (DN) of valid, unmasked pixels: mostly sea.
+
+    The model's input normalisation was frozen on Sentinel-1A; if another
+    satellite's calibration differs, this level moves.
+    """
+    keep = ~masked & (bands > 0).all(axis=0)
+    return [float(np.median(band[keep])) if keep.any() else 0.0 for band in bands]
 
 
 def reference_cells(cells, box, scene, offset, masked) -> tuple[list, int]:
@@ -346,6 +374,9 @@ def compare_scene(area: str, scene_name: str, loaded, gfw_client) -> dict:
         "models": models,
         "refs": refs,
         "refs_dropped_masked": dropped,
+        # GFW detections in the box before masking: none means GFW did not cover the pass.
+        "gfw_in_box": sum(ref[2] for ref in refs) + dropped,
+        "sea_dn": sea_levels(bands, masked),
         "seconds": round(time.perf_counter() - started, 1),
     }
 
@@ -537,6 +568,11 @@ def summarise(
     """Per detector, area and matching rule: P, R, F1 and subset recalls; per model a threshold
     sweep and a paired bootstrap against CFAR."""
     results = load_results(out)
+    # A pass with no GFW detection anywhere in the box is one GFW did not cover
+    # (no Sentinel-1C data in 2025, offline July-September 2026), not an empty
+    # sea: scoring it would turn every detection into a false alarm.
+    excluded = [r["scene"] for r in results if r.get("gfw_in_box", 1) == 0]
+    results = [r for r in results if r.get("gfw_in_box", 1) != 0]
     labels = list(results[0]["models"]) if results else ["model"]
     unknown = set(thresholds or {}) - set(labels)
     if unknown:
@@ -563,6 +599,7 @@ def summarise(
             bootstrap[label][rule] = {"threshold": chosen[label], **boot} if boot else {}
     return {
         "scenes": len(results),
+        "excluded_no_gfw": excluded,
         "splits": sorted({r.get("split", "unrecorded") for r in results}),
         "model_threshold": threshold,
         "thresholds": chosen,
@@ -607,13 +644,16 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
     wanted = {spec.label: prov for spec, prov, _ in loaded}
     client = gfwapiclient.Client(access_token=os.environ["GFW_API_TOKEN"])
     args.out.mkdir(parents=True, exist_ok=True)
-    pairs = split_pairs(args.index, args.split)
+    if args.pairs:
+        pairs, split = read_pairs(args.pairs), args.pairs.stem
+    else:
+        pairs, split = split_pairs(args.index, args.split), args.split
     if args.per_area:
         pairs = spread(pairs, args.per_area)
     todo = [(a, s) for a, s in pairs if not is_done(result_path(args.out, a, s), wanted)]
     if args.limit:
         todo = todo[: args.limit]
-    print(f"{len(todo)} {args.split} passes to compare with {', '.join(wanted)}", flush=True)
+    print(f"{len(todo)} {split} passes to compare with {', '.join(wanted)}", flush=True)
     failed = 0
     for area, scene_name in todo:
         try:
@@ -632,7 +672,7 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
                 flush=True,
             )
             continue
-        result["split"] = args.split
+        result["split"] = split
         write_result(result_path(args.out, area, scene_name), result)
         found = " ".join(
             f"{label} {sum(p[2] >= thresholds.get(label, MODEL_THRESHOLD) for p in m['peaks'])}"
@@ -648,6 +688,8 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
 
 
 def print_summary(summary: dict) -> None:
+    if summary["excluded_no_gfw"]:
+        print(f"left out {len(summary['excluded_no_gfw'])} passes with no GFW detection in the box")
     for rule, areas in summary["table"].items():
         print(
             f"\n{rule} ({summary['scenes']} passes, {'/'.join(summary['splits'])}, "
@@ -687,6 +729,9 @@ def main() -> int:
         help=f"LABEL=PATH[@TILE/OVERLAP], repeatable (default model={DEFAULT_MODEL.as_posix()})",
     )
     parser.add_argument("--split", choices=("val", "test"), default="test")
+    parser.add_argument(
+        "--pairs", type=Path, help='file of "area scene" lines to compare instead of a split'
+    )
     parser.add_argument(
         "--threshold",
         action="append",

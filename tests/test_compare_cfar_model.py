@@ -563,6 +563,54 @@ def test_bootstrap_states_the_threshold_it_was_computed_at(tmp_path):
     assert summary["bootstrap"]["a"]["same_cell"]["threshold"] == pytest.approx(0.3)
 
 
+def test_main_compares_the_passes_listed_in_a_pairs_file(offline_main, tmp_path):
+    m = offline_main
+    listed = "S1D_IW_GRDH_1SDV_20260910T020650_C_COG.SAFE"
+    pairs = tmp_path / "s1cd_2026-09.txt"
+    pairs.write_text(f"# new satellites\n\nfujairah {listed}\n", encoding="utf-8")
+
+    assert m.run("--model", f"a={m.models['a']}", "--pairs", str(pairs)) == 0
+
+    assert [scene for scene, _ in m.compared] == [listed]
+    result = json.loads((m.out / f"fujairah__{listed.removesuffix('.SAFE')}.json").read_text())
+    assert result["split"] == "s1cd_2026-09"
+
+
+def test_read_pairs_refuses_an_unknown_area(tmp_path):
+    pairs = tmp_path / "pairs.txt"
+    pairs.write_text("atlantis S1C_X.SAFE\n", encoding="utf-8")
+
+    with pytest.raises(ValueError, match="atlantis"):
+        compare.read_pairs(pairs)
+
+
+def test_summarise_leaves_out_passes_gfw_did_not_cover(tmp_path):
+    refs = [[56.50, 25.20, 1, True]]
+    write_result(tmp_path, "s1", models={"a": ("x", 128, [])}, refs=refs, cfar=[[56.50, 25.20]])
+    write_result(tmp_path, "s2", models={"a": ("x", 128, [])}, refs=[], cfar=[[56.60, 25.30]])
+    for name, seen in (("s1", 1), ("s2", 0)):
+        path = tmp_path / f"fujairah__{name}.json"
+        record = json.loads(path.read_text(encoding="utf-8"))
+        path.write_text(json.dumps({**record, "gfw_in_box": seen}), encoding="utf-8")
+
+    summary = summarise(tmp_path)
+
+    assert summary["scenes"] == 1
+    assert summary["excluded_no_gfw"] == ["s2"]
+    assert summary["table"]["same_cell"]["all"]["cfar"]["fp"] == 0
+
+
+def test_sea_levels_are_medians_of_valid_unmasked_pixels():
+    bands = np.zeros((2, 4, 4), dtype=np.uint16)
+    bands[0] = [[10, 20, 30, 40]] * 4
+    bands[1] = 5
+    bands[1, 0, 0] = 0  # nodata in one band drops the pixel from both
+    masked = np.zeros((4, 4), dtype=bool)
+    masked[:, 3] = True  # coast: the 40 DN column
+
+    assert compare.sea_levels(bands, masked) == [20.0, 5.0]
+
+
 def test_parse_model_spec_reads_label_path_and_tiling():
     spec = compare.parse_model_spec(r"e14=E:\runs\epoch_14.onnx@256/64")
 
