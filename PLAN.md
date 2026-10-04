@@ -449,6 +449,7 @@ Pretrain on xView3 (or the LS-SSDD + SSDD fallback), fine-tune on Gulf auto-labe
 ### Phase 6 — Fusion + events (3 days)
 Hungarian AIS↔SAR matcher, event engine, evidence storage, alert feed.
 **Done when:** dark vessels are flagged with auditable evidence and a measured Gulf-wide dark rate.
+**Revised 2026-10-04 (agreed with the user; v1 design in §17 "Phase 6 feasibility"):** dark-vessel candidates in the five boxes are flagged with evidence cards, and the dark rate is reported with a bootstrap interval as a curve over the gate margin, by region and period, with the operating margin and pre-filter settings chosen on validation passes only and v1's agreement with GFW's matched flag reported.
 
 ### Phase 7 — UI/UX build-out (4–5 days)
 Timeline scrubber, coverage honesty overlay, vessel detail panel with SAR chip, filters, watchlists, geofence drawing, alert feed, sanctions badges, RTL support.
@@ -903,6 +904,9 @@ eliminates the tile-seam box-merge problem.
 - Every event stores its evidence: SAR chip, AIS track segment, match scores.
   **Never surface an alert that cannot be explained.**
 - ✅ **Done when:** dark vessels are flagged with auditable evidence.
+- **Superseded 2026-10-04:** v1 is a cell-hour fusion on GFW hourly presence (no
+  position-level AIS is available); design, limits and the revised done-when in
+  §11 Phase 6 and §17 "Phase 6 feasibility".
 
 ### PHASE 7 — UI/UX build-out
 Dark-themed operational console. Three panes — left filter rail, centre map, right context
