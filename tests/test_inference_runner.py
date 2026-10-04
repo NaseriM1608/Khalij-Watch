@@ -73,6 +73,27 @@ def test_runner_refuses_an_odd_overlap(monkeypatch):
         detector.detect(np.zeros((2, 300, 300), dtype=np.float32), np.zeros((300, 300), bool))
 
 
+def test_defaults_are_the_ones_chosen_against_gfw_for_kaggle_v2():
+    from core.inference import runner
+
+    assert (runner.DEFAULT_TILE, runner.DEFAULT_OVERLAP) == (256, 64)
+    assert runner.DEFAULT_THRESHOLD == 0.60
+
+
+def test_runner_uses_the_defaults_when_not_given(monkeypatch):
+    import sys
+    from types import SimpleNamespace
+
+    from core.inference import runner
+
+    fake_ort = SimpleNamespace(InferenceSession=lambda *_args, **_kwargs: None)
+    monkeypatch.setitem(sys.modules, "onnxruntime", fake_ort)
+
+    detector = runner.PointDetectorRunner(None)
+
+    assert (detector.tile, detector.overlap, detector.threshold) == (256, 64, 0.60)
+
+
 def _bare_init(self, _model_path, *, threshold=0.45, tile=128, overlap=32):
     self.threshold, self.tile, self.overlap = threshold, tile, overlap
 

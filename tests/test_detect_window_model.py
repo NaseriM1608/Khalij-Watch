@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+from pathlib import Path
 from types import SimpleNamespace
 from typing import ClassVar
 
@@ -52,6 +53,7 @@ def stubs(tmp_path, monkeypatch):
         window=PixelWindow(300, 200, 40, 30),  # col_off, row_off, width, height
         coast_calls=0,
         stored=[],
+        versions=[],
     )
     FakeRunner.created = []
 
@@ -67,8 +69,9 @@ def stubs(tmp_path, monkeypatch):
         coast[:, :5] = True
         return coast
 
-    def store_detections(_url, _product, _box, found, *_args, **_kwargs):
+    def store_detections(_url, _product, _box, found, _pol, version, **_kwargs):
         state.stored.append(found)
+        state.versions.append(version)
         return len(found)
 
     monkeypatch.setattr(build_dataset, "read_pair", read_pair)
@@ -118,3 +121,29 @@ def test_peaks_are_located_at_window_offset_plus_peak_position(stubs):
     # Same convention as CFAR's georeference: scene pixel = window pixel + offset.
     assert stubs.scene.lonlat_calls == [([210.25, 230.0], [320.75, 305.5])]
     assert [p.confidence for p in stubs.stored[0]] == [0.9, 0.6]
+
+
+def test_stored_detector_version_names_the_model_file(stubs, tmp_path):
+    stubs.args.model = tmp_path / "point_detector_kaggle-v2.onnx"
+    stubs.args.model.write_bytes(b"")
+
+    assert run(stubs) == 0
+
+    assert stubs.versions == ["kaggle-v2"]
+
+
+def test_the_default_model_is_run_2(monkeypatch):
+    seen = []
+    product = SimpleNamespace(
+        name="S1A_TEST", acq_start=PRODUCT.acq_start, orbit_direction="ASCENDING"
+    )
+    monkeypatch.setattr(dw, "load_settings", lambda: None)
+    monkeypatch.setattr(dw, "latest_product_covering", lambda *_args: product)
+    monkeypatch.setattr(dw, "run_model", lambda args, *_rest: seen.append(args.model) or 0)
+    monkeypatch.setattr(
+        "sys.argv", ["detect_window", "--lon", "56.5", "--lat", "25.5", "--detector", "model"]
+    )
+
+    assert dw.main() == 0
+
+    assert seen == [Path("models") / "point_detector_kaggle-v2.onnx"]

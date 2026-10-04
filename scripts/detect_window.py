@@ -344,8 +344,8 @@ def main() -> int:
     parser.add_argument(
         "--model",
         type=Path,
-        default=Path("models") / "point_detector_kaggle-v1.onnx",
-        help="exported ONNX point detector (fp32)",
+        default=Path("models") / "point_detector_kaggle-v2.onnx",
+        help="exported ONNX point detector (fp32); default run 2, chosen against GFW",
     )
     args = parser.parse_args()
     if not 0 < args.size_km <= MAX_SIZE_KM:

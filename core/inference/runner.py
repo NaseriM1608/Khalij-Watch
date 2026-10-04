@@ -4,10 +4,11 @@ EfficientNet's squeeze-excitation blocks average over the whole input, so
 the output depends on the tile size. On large tiles of calm, dark sea that
 average shifts every feature and the model goes blind (2024-05-16, Fujairah,
 kaggle-v1: 0 detections on 2048 px tiles, 128 on 128 px tiles), so it runs on
-small tiles. DEFAULT_TILE (128 px) is the chip size kaggle-v1 was trained on;
-kaggle-v2 was trained on random 96 px crops of those chips, and which tile
-size suits it has not been checked yet. INT8 dynamic quantisation is not used:
-it breaks the trained model (logits off by up to 8.8) and is slower on this CPU.
+small tiles. For the product model (kaggle-v2) 256 px tiles with 64 px overlap
+scored best against Global Fishing Watch on the validation passes, and they
+halve the duplicate peaks that tile seams make at 128 px. INT8 dynamic
+quantisation is not used: it breaks the trained model (logits off by up to
+8.8) and is slower on this CPU.
 """
 
 from __future__ import annotations
@@ -21,9 +22,10 @@ import numpy as np
 from core.inference.contract import normalise_chip
 from core.inference.decode import decode_peaks
 
-DEFAULT_THRESHOLD = 0.45  # chosen on validation for kaggle-v1 (epoch 6)
-DEFAULT_TILE = 128  # kaggle-v1 training chips; not yet checked for kaggle-v2
-DEFAULT_OVERLAP = 32
+# Chosen against GFW on the validation passes for kaggle-v2 epoch 5 (2026-10-04).
+DEFAULT_THRESHOLD = 0.60
+DEFAULT_TILE = 256
+DEFAULT_OVERLAP = 64
 DETECTOR = "pointdet"
 
 
