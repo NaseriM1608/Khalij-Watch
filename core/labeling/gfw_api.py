@@ -64,6 +64,18 @@ def is_transient(exc: Exception) -> bool:
     return isinstance(exc, APIConnectionError | APITimeoutError)
 
 
+def box_polygon(box: BBox) -> dict:
+    """The GeoJSON polygon 4Wings reports take for a box."""
+    ring = [
+        [box.min_lon, box.min_lat],
+        [box.max_lon, box.min_lat],
+        [box.max_lon, box.max_lat],
+        [box.min_lon, box.max_lat],
+        [box.min_lon, box.min_lat],
+    ]
+    return {"type": "Polygon", "coordinates": [ring]}
+
+
 async def fetch_sar_cells(
     client: Any,
     box: BBox,
@@ -73,18 +85,7 @@ async def fetch_sar_cells(
     transient: Callable[[Exception], bool] | None = None,
 ) -> list[GfwCell]:
     """All matched and unmatched SAR presence cells inside ``box`` during ``[start, end)``."""
-    polygon = {
-        "type": "Polygon",
-        "coordinates": [
-            [
-                [box.min_lon, box.min_lat],
-                [box.max_lon, box.min_lat],
-                [box.max_lon, box.max_lat],
-                [box.min_lon, box.max_lat],
-                [box.min_lon, box.min_lat],
-            ]
-        ],
-    }
+    polygon = box_polygon(box)
     transient = transient or is_transient
     cells: list[GfwCell] = []
     for first, stop in month_ranges(start, end):
