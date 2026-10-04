@@ -1988,7 +1988,7 @@ and records each pass's median sea amplitude.
 |---|---|---|---|---|---|
 | S1A 2024-25 test (92) | 3,900 (6%) | 1.29 | 0.808 / 0.817 | 0.848 / 0.854 | +0.009 (+0.002 to +0.016) |
 | S1A 2026 Jan-Jun (20) | 854 (26%) | 1.23 | 0.833 / 0.827 | 0.874 / 0.869 | -0.006 (-0.022 to +0.008) |
-| S1C/S1D 2026-09 (47) | 1,899 (43%) | 1.58 | 0.718 / 0.721 | 0.753 / 0.758 | +0.003 (-0.006 to +0.014) |
+| S1C/S1D 2026-09 (47) | 1,899 (43%; 20% without a GFW artefact, next entry) | 1.58 | 0.718 / 0.721 | 0.753 / 0.758 | +0.003 (-0.006 to +0.014) |
 
 - **No calibration shift.** Median sea amplitude on S1C (VV 61, VH 28 DN)
   and S1D (56, 28) lies inside the S1A range (per-area medians of 2024-25
@@ -2011,4 +2011,323 @@ and records each pass's median sea amplitude.
 
 No recalibration is needed; run 2 stays the product model. The share of GFW
 detections without AIS rose from 6% (2024-25) to 26% (early 2026) and 43%
-(September 2026).
+(September 2026). (Corrected in the next entry: the 43% includes a GFW
+matching artefact on one orbit; without it, 20%.)
+
+### 2026-10-04 - Phase 6 feasibility: AIS at pass times
+
+Before any Phase 6 code, the user asked whether the planned fusion (§9 "v1":
+AIS extrapolated to the acquisition time, the anisotropic azimuth-corrected
+gate of §8, Hungarian assignment) can be fed with AIS we can actually get for
+our Gulf passes. Desk research by three researchers and a synthesis (sources
+inline, `data/qa/phase6_probes/phase6_desk_research_synthesis.md`) was
+followed by API probes P1-P14 against Global Fishing Watch (raw responses and
+`findings*.json` in `data/qa/phase6_probes/`; one-off scripts
+`data/qa/phase6_probes*.py`, not committed). The synthesis predates the
+probes; where they differ, the probes win. Probe numbers versus the
+synthesis's list: P1-P4 and P6-P8 are its probes 1-4 and 6-8; P9 is its
+probe 5 (the trend; P5 failed); P10 (a busy pass) also settles its probe 11;
+P11 runs the non-fishing part of its probe 7, P12 the length-coverage part
+of its probe 8 (its tanker-class check was not run); P13-P14 are new. Its probes 9
+(GFW infrastructure), 10 (interaction endpoint), 12 (download-portal
+metadata) and 13 (aisstream re-check) were not run. A multi-agent fact check
+of this entry against the raw files corrected several numbers before commit.
+
+**The only free AIS at our pass times is GFW's hourly presence.**
+- Measured: `public-global-presence` (v4.0), read through 4Wings reports at
+  0.01° cells (about 1.1 km), hourly, grouped by vessel, gives one row per
+  vessel per hour, each worth exactly 1 hour, with the cell, GFW vessel id,
+  MMSI, IMO, name, flag and GFW vessel type. No speed, no course, no time
+  within the hour: entry and exit timestamps are truncated to the hour (all
+  140 vessels of the busy pass below read ":00:00"). Hour-level query windows
+  are honoured (a 3-hour window returns exactly those hours), so one small
+  report per pass is enough (about 20 s for a 20 km box). Reports cover at
+  most 366 days (HTTP 422 otherwise) and only one runs at a time per token
+  (HTTP 429).
+- Measured: GFW's `/v3/vessels/{id}/tracks` answers 403 for our token with
+  the all-vessel tracks dataset (404 with the fishing-only one, for a
+  non-fishing vessel). The endpoint is in the OpenAPI spec embedded in GFW's
+  documentation page but not in its endpoint list or SDKs (desk research).
+  So GFW gives no position-level AIS at our pass times; apart from a small
+  Dubai sample (desk research, below), no free source does.
+- Desk research, not verified here: presence latency about 96 h; GFW SAR
+  detections about 5 days (one GFW page says 72 h), so fusion runs in batch
+  at least 4-5 days after a pass. Licence CC BY-NC 4.0 with attribution
+  ("Powered by Global Fishing Watch"). AISHub needs our own receiver; UNGP,
+  EMSA and CMS are closed to a university researcher; aisstream keeps no
+  history; position-level AIS is commercial (Datalastic area history, about
+  EUR 199/month per a search snippet, UNVERIFIED; Kpler/Spire on quote). One
+  small free position-level sample exists: about 43k terrestrial positions
+  of 384 vessels off Dubai/Jebel Ali, March-April 2026 (Hugging Face
+  `yasumorishima/hormuz-ais`, MIT); downloading it needs the user's consent.
+- Measured earlier (§17, 2026-09-25): aisstream carried no Gulf traffic in
+  about 3.5 h of ingest on 2026-09-24/25; not re-checked since.
+- Desk research, not verified here: GNSS jamming and spoofing degrade any
+  Gulf AIS (Windward: about 970 ships a day affected in mid-June 2025; about
+  1,650 ships hit in total between 28 February and 7 March 2026; a sustained
+  spoofing cluster at Hormuz already in November 2024-February 2025).
+
+**What the probes measured at two passes.**
+- Busy pass (S1C, Fujairah 20 km box, 2026-09-25 14:15 UTC): 142, 140 and
+  140 AIS vessels present in the hours starting 13:00, 14:00 and 15:00,
+  against 155 run 2 detections, 172 CFAR and 84 GFW SAR detections (69
+  matched by GFW). Of the 127 vessels present in all three hours, 91 stayed
+  in one cell (anchored). The anchorage is crowded at cell level: the 140
+  vessels of the pass hour sit in 111 cells, 50 of them share a cell with
+  another vessel (up to 4), and the median distance to the nearest other
+  vessel is 1.0 km. Of GFW's 69 matched detections, 65 carry a vessel id
+  (4 carry none; findings2.json and the handoff counted the blank id as a
+  66th vessel). Of the 65, 56 are in the presence feed in the pass hour, 2
+  more only at 13:00 or 15:00, and 7 not in the window. For the 56, GFW's SAR
+  cell equals the presence cell for 49, lies within 1.1 km for 54, and is
+  8.8 and 11.0 km away for 2. For the 58 found in the window, GFW's SAR
+  position lies within 0.8 km of the vessel's hourly polyline (cells at
+  13:00, 14:00, 15:00) for 53 and within 1.5 km for 57: a direct check of the
+  gate proposed below. Types in the pass hour: 101 OTHER, 35 CARGO, 2 BUNKER,
+  1 blank, 1 "NA"; no tanker class appears (which GFW classes tankers fall
+  into was not checked).
+- Quiet pass (S1C, Hormuz 40 km box, 2026-09-09 02:14 UTC): 1 AIS vessel in
+  the pass hour and only 6 (12 vessel-hours, at most 2 at once) over the whole
+  day, mostly small regional craft; GFW 4 SAR detections, 3 unmatched; our
+  CFAR 5. GFW's SAR cell and the presence cell of the one matched vessel are
+  5.4 km apart. Here almost every detection will look dark, and the rate
+  measures AIS absence (traffic, jamming or reception), which v1 cannot tell
+  apart.
+- GFW SAR rows carry the acquisition hour and, in entryTimestamp, the scene
+  time; matched rows join the presence feed on hour and vessel id.
+- Events over the Gulf box. AIS gaps (GFW's rule, per its documentation:
+  at least 12 h, starting at least 50 nm offshore; every returned event meets
+  it): the query for 2024-01..2026-09 returned 42 events, 39 distinct, 36
+  starting in the window, but only 15 distinct ones switched AIS off inside
+  the box (7 in the Gulf of Oman near 24.7-24.8N 57.6-57.9E, none near our boxes;
+  the latest started 2026-04-17). The other 24 do not switch AIS off in the
+  box; 7 switch it back on inside it. No gap can start in our coastal boxes
+  (50 nm rule), but two end inside them (Khor Fakkan 2024-10-13, Hormuz
+  2024-11-14) and two within 7 km (Khor Fakkan, Fujairah). Encounters
+  (P11): 1,490,740 for 2025-01..2026-09; filtered to FISHING-FISHING
+  1,490,730, to NON_FISHING-NON_FISHING 0; the first 100 are fishing boats
+  moored together about 1 km off Qatif (26.55N 50.03E) for days, starting
+  in November-December 2024. So GFW publishes no tanker-tanker encounters
+  here. Loitering: 67,557 in August-September 2026. All three queries
+  return events that start before the requested window.
+- Registry lengths (P12; needed for IDENTITY_ANOMALY): of the 140 vessels of
+  the busy pass hour, 139 are known to GFW's Vessels API and 49 have a
+  registry record, but only 4 have a registry length (116-182 m), although
+  132 broadcast an IMO number. On the 2024-25 labels, 7-15% of vessels had a
+  registry length (§17, 2026-09-27).
+
+**The 2024-2026 trend (P9), and a GFW processing artefact (P13).**
+Monthly per-cell reports over the Gulf box (47.5-58E, 23.5-30.5N; LOW 0.1°
+cells; 99 reports, one per series and month, since a whole-year presence
+report failed on GFW's side; `findings3.json`): AIS presence, and GFW SAR
+detections matched and unmatched. East = east of 56.0°E (Strait of Hormuz,
+UAE east coast, Gulf of Oman); west = the inner Gulf.
+
+| Period | AIS vessel-hours a day | AIS vessels a month | GFW SAR detections a month | Matched share, all | west | east |
+|---|---|---|---|---|---|---|
+| 2024 | 125,863 | 14,880 | 12,411 | 0.71 | 0.71 | 0.69 |
+| 2025 Jan-Sep | 132,275 | 19,458 | 13,566 | 0.70 | 0.72 | 0.66 |
+| Oct 2025-Feb 2026 | 145,606 | 22,574 | 13,938 | 0.64 | 0.73 | 0.42 |
+| Mar-Jun 2026 | 66,640 | 13,882 | 13,176 | 0.44 | 0.51 | 0.25 |
+| Jul-Sep 2026 | 99,352 | 16,925 | 25,654 | 0.53 | 0.58 | 0.41 |
+
+From October 2025 the east and "all" shares include the orbit artefact below
+(confirmed for October-February and September 2026, presumed in between);
+the west column is the clean trend. The 33 monthly rows are in
+`findings3.json` and the handoff.
+
+- **October 2025: a GFW artefact, not ships going dark.** The east's matched
+  share fell from about 0.66 to 0.42 while east AIS presence, east vessel
+  counts and SAR totals stayed flat. About half of the change sits in the UAE
+  east-coast cells (24.9-25.7N, 56.0-56.7E: unmatched 159 -> 1,408, matched
+  3,224 -> 1,934, July-September vs October-December 2025); Gulf of Oman
+  cells to the south and east fell too (matched share 0.87 -> 0.39 and
+  0.63 -> 0.31); the Hormuz cells did not. Per acquisition over our Fujairah
+  and Khor Fakkan boxes (P13, hourly, September 2025-February 2026): from
+  2025-10-02, every acquisition of one descending orbit (about 02:07 UTC,
+  every 12 days: 10-02, 10-14, ... 02-23) has all its 132-165 GFW detections
+  unmatched and none matched, while all other acquisitions stay at 0-5%
+  unmatched. The same orbit was normal on 2025-09-08 and 09-20 (3 of 186 and
+  6 of 151 unmatched, P13) and on 2025-08-03 (4 of 138, test passes). It is
+  still broken on S1C/S1D: on the 02:06 UTC passes of 2026-09-10, 09-16 and
+  09-22, all 553 GFW detections at Fujairah and Khor Fakkan (6 area-passes)
+  are unmatched (the 3 Hormuz area-passes hold 6 detections, too few to
+  judge; the same orbit's Hormuz frame stayed matched in 2025), the other
+  September passes 17-38%. The AIS presence feed is intact at the artefact
+  hours (P14: 243 vessels over the two boxes at 2026-09-16 02:00, against 253
+  at the normal pass of 09-15 02:00): the fault is in GFW's SAR matching.
+- **From March 2026: AIS presence fell together with the matched share.**
+  Gulf-wide AIS vessel-hours fell from 142,132 a day (February) to 61,637
+  (March) and distinct AIS vessels from 21,945 to 10,199, in the west as in
+  the east, while GFW's SAR detections stayed level (13,211 -> 13,547): the
+  ships were still there, far fewer carried AIS that GFW received. The west's
+  matched share fell from 0.74 (February) to 0.51 (March). It is not a
+  matching artefact of the October kind, since the presence feed itself fell;
+  whether the fall comes from ships switching AIS off, reception loss,
+  jamming or GFW's own AIS processing, these data cannot separate. The
+  timing matches the regional conflict the desk research dates to
+  28 February 2026 (UNVERIFIED here). The east's March-June shares probably
+  still include the orbit artefact (not checked for those months; in June
+  presence rose 51% on May while the Gulf-wide share stayed at 0.38).
+- **July-September 2026: partial recovery.** AIS presence back to about 75%
+  of 2025, the west's matched share 0.58. July and August hold GFW SAR
+  detections at about the post-June level (July about 11% lower per day than
+  August), so GFW's reported backfill from 30 June largely holds for this
+  box; a short gap within July cannot be excluded at monthly resolution.
+  Detections double because two satellites image.
+- Spoofing to land is not visible in the presence feed: at most 0.5% of AIS
+  hours fall in the confidently-on-land interior polygons of
+  `core/ais/landmask.py` in any month (GFW may filter such positions;
+  unverified).
+- **Corrections to earlier entries.** (1) The 43% of GFW detections without
+  AIS on the S1C/S1D passes (2026-09, table above in "Sentinel-1C/1D check")
+  includes the 6 artefact area-passes; without them it is 20% (269 of 1,346;
+  263 of 1,340 without the 3 sparse Hormuz area-passes of that orbit too).
+  F1, recall and "CFAR per GFW detection" do not use the matched flag and are
+  unaffected. (2) 727 of run 2's 1,603 `gfw_unmatched` training positives
+  come from 14 artefact area-passes (Fujairah/Khor Fakkan, 02:07 UTC orbit,
+  October-December 2025), each with no matched detection, where the
+  neighbouring passes over the same anchorage are about 98% matched: they
+  are very likely AIS ships. They are still vessels, so they remain valid
+  positives, but only about 876 of the new positives are vessels GFW really
+  saw without AIS. Two validation area-passes (2025-12-01) are affected but
+  are not among the 25 used for selection; no test pass, no validation pass
+  used, and no S1A 2026 pass is affected, so Phase 5's numbers stand. The 6%
+  (2024-25) and 26% (S1A 2026) figures contain no artefact passes.
+
+**Which events are feasible with GFW cell-hour AIS.**
+
+| Event | With GFW hourly presence (v1) | What limits it |
+|---|---|---|
+| `DARK_VESSEL` | Feasible: one of our detections with no AIS vessel's hourly track inside the gate, after the pre-filters | The gate is about a kilometre or more; in lanes and in crowded anchorages a dark ship near an AIS ship is absorbed (rate biased down); reception gaps, jamming and spoofing bias it up |
+| `ZONE_ENTRY` | Feasible: detections at pass times, presence cells every hour | Pass times only: about 2-3.5 a week per box with S1C+S1D (10 passes per box, 7 at Sharjah/Dubai, 8-29 September 2026), 1.2-1.8 with S1A alone |
+| `STS_TRANSFER` | Conditional, from our SAR only: two detections about 100-300 m apart (or one long merged CFAR blob), more than a set distance offshore, persistent across passes, with paired presence cells; GFW encounters cannot corroborate (none non-fishing) | CFAR fragments of one large ship lie about 170 m apart and the model leaves 2.8% duplicate peaks within 100 m; bunkering alongside big ships at Fujairah gives 265-365 m CFAR blobs; the merged-blob branch needs CFAR length |
+| `AIS_GAP` | Weak: a vessel absent from hourly presence while inside imaged coverage; GFW gap events corroborate where they exist; at our boxes only gaps that end there can (15 distinct events started in the Gulf box in 33 months, none near our boxes; 2 ended inside them) | Absence cannot separate switching AIS off from reception loss or jamming without positions |
+| `POSITION_SPOOF` | Coarse candidates for stationary vessels only: same cell for 3 h, well inside the footprint, no detection within about 1-2 km; many vessels jumping together become an interference flag, not spoofing | Ships under way cannot be tested; missed small ships make false candidates |
+| `IDENTITY_ANOMALY` | Not feasible with GFW alone: 4 of 140 vessels have a registry length | The product model measures no length; CFAR extents are rough (r 0.56-0.75 against registry lengths) and merged hulls at bunkering anchorages would raise false anomalies |
+
+**An honest dark rate.**
+- Unit: our own detections (the frozen product model, run 2) in imaged water
+  of the five boxes, after (a) merging duplicate peaks and fragments along a
+  ship's axis (about 100 m), (b) removing detections in the shore buffer,
+  (c) within about 300 m of fixed infrastructure, using the time-aware OPD
+  mask already in the pipeline (§17, 2026-09-11) plus multi-pass persistence
+  (infrastructure is a minor confounder in these boxes: Fujairah and Khor
+  Fakkan are open water, Hormuz has two platforms, §17 2026-09-29), (d)
+  azimuth ghosts at the per-sub-swath offset from the annotation XML (about
+  4.7-5.8 km; none seen at 10 m on S1A), and (e) near the footprint or box
+  edge.
+- Dark: no AIS presence vessel whose hourly polyline (cells at H-1, H, H+1)
+  passes within the gate of the detection. A detection inside some vessel's
+  gate that loses the one-to-one assignment is "ambiguous" (a candidate
+  set), not dark.
+- Reported as a curve over the swept gate margin (the margin added to the
+  floor of cell half-diagonal plus azimuth allowance, from 0 to about
+  10 km), with a bootstrap interval over passes, never as one number.
+- Validation objective: on validation passes, our "has an AIS candidate"
+  call against GFW's matched flag for our detections that coincide with a
+  GFW detection (GFW matched with position-level AIS), excluding GFW
+  artefact passes; that agreement, reported on test and 2026 passes, is the
+  proxy for v1's accuracy as a matcher (GFW's matching has its own errors).
+  Validation fixes the operating margin used for DARK_VESSEL alerts and the
+  pre-filter thresholds; the rate is still reported over the whole sweep.
+- Strata. Region: inner Gulf (Sharjah/Dubai, Ras Al Khaimah), Hormuz lanes,
+  Gulf of Oman (Fujairah, Khor Fakkan). Period, with passes processed so
+  far: before 28 February 2026 (92 test area-passes of 2024-25 and 10 of
+  January-February 2026; not interference-free, given the reported Hormuz
+  spoofing cluster of late 2024); 28 February-29 June 2026 (15 S1A
+  area-passes processed, 10 with GFW detections for the comparison);
+  30 June-7 September 2026 (S1C/S1D only after S1A's
+  retirement; GFW SAR offline from 3 July, later backfilled; no pass
+  processed yet); after GFW's 8 September recalibration (47). Period and
+  satellite are confounded (S1A until June, S1C/S1D after, with GFW's
+  thinner S1C/S1D reference). Motion is not a stratum of the dark rate: it is
+  defined from AIS cells, which dark detections lack by definition, and the
+  model has no heading or speed output.
+- Length: the product model outputs no length, so a length stratum (at least
+  50 m, roughly ships obliged to carry AIS) can only use a co-located CFAR
+  detection's extent; v1 reports the rate without a length cut and with a
+  CFAR-length stratum.
+- Not Gulf-wide: we detect in five boxes. GFW's unmatched share over the same
+  cell-hours is the external comparison (same radar, different detector and
+  matcher), excluding its artefact passes; transit-based figures (e.g.
+  42-70% of Hormuz tanker transits dark in late June-mid July 2026, Lloyd's
+  List Intelligence via the desk research) are not comparable.
+- Error sources: AIS reception gaps, jamming and GNSS displacement inflate
+  the rate; SAR false alarms, duplicate peaks and split ships inflate it
+  (run 2's precision against GFW is 0.72-0.76 on S1A test passes, and
+  detectors find 1.58 objects per GFW detection on S1C/S1D, partly vessels
+  GFW misses); hourly sampling and crowding (wide or shared gates) deflate
+  it; missed small boats; GFW's own matching artefacts if GFW is used.
+
+**Recommended v1. This supersedes §9 "v1" and the §15 PHASE 6 "v1"
+bullet**: exact-time extrapolation, the AIS-velocity azimuth correction and
+heading residuals need position-level AIS, which we do not have. For the
+same reason the §12 "with/without azimuth correction" ablation and the §13
+AIS-position-correction mitigation wait for upgrade (1), and the Phase 1.5
+plausibility filter cannot run on cell-hour presence (no messages); the
+interference flag below stands in for it. v1 is a cell-hour fusion, run in
+batch at least 4-5 days after a pass:
+1. Inputs per pass: our detections (run 2; CFAR for length); GFW presence
+   for H-1..H+1 over the box buffered by about one hour of travel (20-35 km),
+   so ships under way keep their hourly cells, in one report; GFW SAR
+   matched and unmatched for the same cell-hours (comparison only); the OPD
+   mask; identity of the present vessels; dataset versions recorded.
+2. Pre-filters: duplicate and fragment merging, shore buffer,
+   infrastructure and persistence, azimuth ghosts, edges.
+3. AIS hypotheses: each present vessel's hourly polyline. Gate: distance from
+   the detection to the polyline within a floor of the cell half-diagonal
+   (about 0.75 km) plus an azimuth allowance (R/V per sub-swath from the
+   annotation XML, about 105-118 s, times a radial speed bounded by the cell
+   displacement: an allowance, not a correction, since direction within the
+   hour is unknown), plus the swept margin. A vessel in one cell for 3 h gets
+   the floor only.
+4. Assignment: a gated cost matrix solved with
+   `scipy.optimize.linear_sum_assignment` (pairs outside the gate at a large
+   finite cost, dropped afterwards); the margin to the second-best option is
+   kept; where several vessels fit one detection or one vessel several
+   detections (common at Fujairah), a candidate set is emitted, not a forced
+   one-to-one match.
+5. Events with evidence cards: the SAR chip, scene and time, detection,
+   gate used, candidate vessels with their hourly polylines (the "AIS track
+   segment"), GFW's matched flag for the cell-hour, pre-filter results,
+   dataset versions, a confidence tier. No alert that cannot be explained.
+6. The dark rate as defined above.
+7. Guards: a pass where GFW matched nothing while the presence feed holds
+   many vessels in the pass hour is flagged as a GFW matching artefact and
+   left out of every comparison with GFW (our own fusion uses presence, which
+   P14 found intact at an artefact hour); a pass where many vessels change
+   cell together between hours gets an interference flag (possible GNSS
+   spoofing), shown on its events. All GFW calls server-side (the token never
+   reaches the browser); attribution; non-commercial; methods re-implemented
+   from the papers (GFW's longline matching repository has no licence).
+§9's corroboration with GFW's `pipe-gaps` needs positions and is dropped from
+v1; GFW's own gap events are used where they exist.
+
+Limits of v1: candidate sets in lanes and crowded anchorages; AIS_GAP at
+hourly resolution without a reception test; POSITION_SPOOF for stationary
+vessels only; no IDENTITY_ANOMALY; retrospective (at least 4-5 days);
+dependent on GFW's reception in a jammed region (AIS presence halved from
+March 2026); five boxes, not the Gulf.
+
+**Upgrades, in order of value.** (1) GFW permits position-level tracks (an
+email; the endpoint is 403 now; the same email can report the orbit
+artefact): exact-time extrapolation, the §8 anisotropic azimuth-corrected
+gate and its §12 ablation, kinematic POSITION_SPOOF, `pipe-gaps` AIS_GAP.
+(2) GFW's Data Download Portal per-detection file (time, position, length,
+matching score per GFW's 2024 announcement; fields, 2026 coverage and
+licence unverified, not probed; a download needs the user's consent): a
+benchmark for our matcher and lengths. (3) Commercial or licensed
+position-level AIS (a Datalastic test, a Kpler research licence, a
+university licence): GFW's probabilistic v2 (§9). (4) The free Dubai
+sample (March-April 2026; user's consent): a check of the cell-hour gate
+against true positions on overlapping S1A passes. (5) aisstream coverage
+returns: a live collector at pass times.
+
+**Proposed Phase 6 done-when** (replaces "dark vessels are flagged with
+auditable evidence and a measured Gulf-wide dark rate"; to be agreed with the
+user): dark-vessel candidates in the five boxes are flagged with evidence
+cards, and the dark rate is reported with a bootstrap interval as a curve
+over the gate margin, by region and period, with the operating margin and
+pre-filter settings chosen on validation passes only and v1's agreement with
+GFW's matched flag reported.
