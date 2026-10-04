@@ -254,3 +254,96 @@ def test_scene_id_lookup(session):
 
     assert SceneRepository(session).id_for("s1d-a") == scene_id
     assert SceneRepository(session).id_for("no-such-product") is None
+
+
+# --------------------------------------------------------------------------
+# Which detector the map shows
+# --------------------------------------------------------------------------
+
+
+def store_model(detections, scene_id, points, *, bbox=WINDOW) -> int:
+    return detections.replace_in_bbox(
+        scene_id,
+        bbox,
+        points,
+        polarisation="VV+VH",
+        detector="pointdet",
+        detector_version="kaggle-v2",
+        confidence=1.0,
+    )
+
+
+def test_model_detector_name_matches_the_runner():
+    from core.db.repository import MODEL_DETECTOR
+    from core.inference.runner import DETECTOR
+
+    assert MODEL_DETECTOR == DETECTOR
+
+
+def test_auto_shows_only_the_model_on_a_pass_both_detectors_saw(session, detections):
+    """Both detectors see the same vessels; showing both draws each one twice."""
+    scene_id = add_scene(session)
+    store(detections, scene_id, [Target(56.45, 25.2), Target(56.55, 25.2)])
+    store_model(detections, scene_id, [Point(56.45, 25.2, 0.9)])
+    session.flush()
+
+    found = detections.in_bbox(WINDOW)
+
+    assert [d.detector for d in found] == ["pointdet"]
+
+
+def test_auto_is_the_default_and_matches_asking_for_it(session, detections):
+    scene_id = add_scene(session)
+    store(detections, scene_id, [Target(56.45, 25.2)])
+    store_model(detections, scene_id, [Point(56.45, 25.2, 0.9)])
+    session.flush()
+
+    assert detections.in_bbox(WINDOW) == detections.in_bbox(WINDOW, detector="auto")
+
+
+def test_auto_still_shows_a_pass_only_cfar_has_seen(session, detections):
+    cfar_only = add_scene(session, "cfar-only")
+    both = add_scene(session, "both", acq=ACQ - dt.timedelta(hours=1))
+    store(detections, cfar_only, [Target(56.45, 25.2)])
+    store(detections, both, [Target(56.55, 25.2)])
+    store_model(detections, both, [Point(56.55, 25.2, 0.9)])
+    session.flush()
+
+    found = detections.in_bbox(WINDOW)
+
+    assert [(d.scene_id, d.detector) for d in found] == [
+        (cfar_only, "cfar"),
+        (both, "pointdet"),
+    ]
+
+
+def test_auto_judges_model_coverage_inside_the_requested_box_only(session, detections):
+    """The model ran on this pass elsewhere, not here: CFAR is all there is here."""
+    scene_id = add_scene(session)
+    elsewhere = BBox(56.7, 25.1, 56.9, 25.3)
+    store(detections, scene_id, [Target(56.5, 25.2)])
+    store_model(detections, scene_id, [Point(56.8, 25.2, 0.9)], bbox=elsewhere)
+    session.flush()
+
+    found = detections.in_bbox(WINDOW)
+
+    assert [(d.lon, d.detector) for d in found] == [(56.5, "cfar")]
+
+
+def test_a_named_detector_or_all_filters_accordingly(session, detections):
+    scene_id = add_scene(session)
+    store(detections, scene_id, [Target(56.45, 25.2)])
+    store_model(detections, scene_id, [Point(56.55, 25.2, 0.9)])
+    session.flush()
+
+    def shown(detector):
+        return sorted(d.detector for d in detections.in_bbox(WINDOW, detector=detector))
+
+    assert shown("cfar") == ["cfar"]
+    assert shown("pointdet") == ["pointdet"]
+    assert shown("all") == ["cfar", "pointdet"]
+
+
+def test_an_unknown_detector_is_refused(detections):
+    with pytest.raises(ValueError, match="detector"):
+        detections.in_bbox(WINDOW, detector="bogus")

@@ -18,7 +18,7 @@ import asyncio
 import datetime as dt
 import logging
 from contextlib import asynccontextmanager
-from typing import Any
+from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
@@ -258,21 +258,26 @@ async def detections(
     bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
     days: int = Query(default=14, ge=1, le=365),
     limit: int = Query(default=20_000, ge=1, le=100_000),
+    detector: Literal["auto", "cfar", "pointdet", "all"] = Query(default="auto"),
 ) -> dict[str, Any]:
     """Radar detections from recent passes, newest pass first.
 
     Each carries the age of the pass that saw it. A detection is a snapshot of
     one moment, hours or days old, and the UI must never draw it as a live
-    contact.
+    contact. By default each pass shows one detector's results - the model's
+    where it ran, CFAR's elsewhere - so no vessel is drawn twice.
     """
     box = _parse_bbox(bbox)
     now = dt.datetime.now(dt.UTC)
     since = now - dt.timedelta(days=days)
     with session_scope(_sessions()) as session:
-        found = DetectionRepository(session).in_bbox(box, since=since, limit=limit)
+        found = DetectionRepository(session).in_bbox(
+            box, since=since, limit=limit, detector=detector
+        )
     return {
         "generated_at": now.isoformat(),
         "bbox": _bbox_json(box),
+        "detector": detector,
         "count": len(found),
         "detections": [_detection_to_json(d, now) for d in found],
         "attribution": "Contains modified Copernicus Sentinel data",

@@ -80,6 +80,15 @@ def _row_timestamp(value: object) -> dt.datetime:
     return _as_utc(value)
 
 
+# The point detector's name in the detections table, as written by
+# core.inference.runner.DETECTOR. Repeated here so the API does not have to
+# import numpy; a test keeps the two equal.
+MODEL_DETECTOR = "pointdet"
+CFAR_DETECTOR = "cfar"
+# Which detections in_bbox returns: one detector, every row, or "auto" - per
+# pass, the model's where it ran and the pass's other rows where it did not.
+DETECTOR_CHOICES = ("auto", CFAR_DETECTOR, MODEL_DETECTOR, "all")
+
 # A contact older than this is stale for live-map purposes. It is still shown,
 # but the UI must render its age explicitly rather than implying it is current.
 DEFAULT_MAX_AGE = dt.timedelta(hours=6)
@@ -518,14 +527,38 @@ class DetectionRepository:
         *,
         since: dt.datetime | None = None,
         limit: int = 20_000,
+        detector: str = "auto",
     ) -> list[DetectionView]:
-        """Detections inside a bounding box, newest pass first."""
+        """Detections inside a bounding box, newest pass first.
+
+        CFAR and the model are stored side by side, so a pass both have seen
+        holds each vessel twice. ``detector`` picks what to return: "cfar" or
+        "pointdet" for one detector, "all" for every row, or "auto" (the
+        default) for, per pass, the model's rows where the model has rows in
+        this box and the pass's other rows where it has none.
+        """
+        if detector not in DETECTOR_CHOICES:
+            raise ValueError(f"detector must be one of {DETECTOR_CHOICES}, got {detector!r}")
         params: dict[str, object] = dict(bbox_params(bbox))
         params["row_limit"] = limit
         since_clause = ""
         if since is not None:
             params["since"] = _bind_timestamp(self._session, since)
             since_clause = "AND s.acq_time >= :since"
+        detector_clause = ""
+        if detector == "auto":
+            # Since filters whole passes, the same pass is in or out for both
+            # rows, so only the scene and the box need repeating here.
+            params["model_detector"] = MODEL_DETECTOR
+            detector_clause = f"""AND (d.detector = :model_detector OR NOT EXISTS (
+                SELECT 1 FROM detections m
+                WHERE m.scene_id = d.scene_id
+                  AND m.detector = :model_detector
+                  AND m.id IN ({bbox_filter_sql("detections")})
+            ))"""
+        elif detector != "all":
+            params["detector"] = detector
+            detector_clause = "AND d.detector = :detector"
 
         sql = f"""
             SELECT d.id, d.scene_id, d.lon, d.lat, d.length_m, d.width_m, d.heading_deg,
@@ -535,6 +568,7 @@ class DetectionRepository:
             JOIN sar_scenes s ON s.id = d.scene_id
             WHERE d.id IN ({bbox_filter_sql("detections")})
             {since_clause}
+            {detector_clause}
             ORDER BY s.acq_time DESC, d.id
             LIMIT :row_limit
         """

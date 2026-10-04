@@ -353,3 +353,68 @@ def test_health_reports_detection_count(client):
     _seed_detection(api._state["sessions"])
 
     assert client.get("/api/health").json()["detections"] == 1
+
+
+@dataclass(frozen=True)
+class _Point:
+    """Shaped like a point-detector result: a position and a score, no hull."""
+
+    lon: float
+    lat: float
+    confidence: float = 0.9
+    length_m: None = None
+    width_m: None = None
+    heading_deg: None = None
+    pixel_count: None = None
+    peak_amplitude: None = None
+
+
+def _seed_both_detectors(factory, lon=56.5, lat=26.5, hours_ago=3):
+    """One pass that both CFAR and the model have searched."""
+    from core.db.repository import DetectionRepository, SceneRepository
+
+    _seed_detection(factory, lon=lon, lat=lat, hours_ago=hours_ago)
+    with session_scope(factory) as session:
+        scene_id = SceneRepository(session).id_for(f"det-{hours_ago}")
+        DetectionRepository(session).replace_in_bbox(
+            scene_id,
+            BBox(lon - 0.1, lat - 0.1, lon + 0.1, lat + 0.1),
+            [_Point(lon, lat)],
+            polarisation="VV+VH",
+            detector="pointdet",
+            detector_version="kaggle-v2",
+            confidence=1.0,
+        )
+
+
+def test_detections_default_to_one_detector_per_pass(client):
+    """A vessel seen by both detectors must be drawn and counted once."""
+    _seed_both_detectors(api._state["sessions"])
+
+    body = client.get("/api/detections").json()
+
+    assert body["detector"] == "auto"
+    assert body["count"] == 1
+    assert body["detections"][0]["detector"] == "pointdet"
+
+
+def test_detections_can_return_every_detector(client):
+    _seed_both_detectors(api._state["sessions"])
+
+    body = client.get("/api/detections", params={"detector": "all"}).json()
+
+    assert body["detector"] == "all"
+    assert sorted(d["detector"] for d in body["detections"]) == ["cfar", "pointdet"]
+
+
+def test_detections_can_return_one_named_detector(client):
+    _seed_both_detectors(api._state["sessions"])
+
+    body = client.get("/api/detections", params={"detector": "cfar"}).json()
+
+    assert body["detector"] == "cfar"
+    assert [d["detector"] for d in body["detections"]] == ["cfar"]
+
+
+def test_unknown_detector_is_rejected(client):
+    assert client.get("/api/detections", params={"detector": "bogus"}).status_code == 422
