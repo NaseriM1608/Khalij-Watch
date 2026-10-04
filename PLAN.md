@@ -1948,3 +1948,25 @@ chosen setting). The code-review fixes of 2026-10-03/04
 trained with two small label bugs since fixed (a half-pixel target offset on
 1.8% of positives, and ignore discs that a later negative disc could
 override).
+
+**Supplement: all 92 test passes** (the user chose to firm up the evidence;
+configuration frozen, nothing tuned on test; the 40 passes above resumed and
+52 added; 3,900 GFW detections, 246 without AIS). F1 same cell: CFAR 0.808,
+run 1 0.763, run 2 **0.817**; neighbours: CFAR 0.848, run 1 0.820, run 2
+**0.854**. Run 2 minus CFAR: F1 +0.009 (+0.002 to +0.016) same cell, now
+significant, and +0.006 (-0.000 to +0.013) neighbours, still touching zero;
+recall on AIS-matched detections +0.008 (+0.003 to +0.015); recall on
+detections without AIS 0.813 against 0.768 (+0.045, -0.03 to +0.11). Run 1
+stays significantly below CFAR (F1 -0.045 and -0.028). By area
+(neighbours, CFAR / run 2): Hormuz lanes 0.860 / 0.918, Ras Al Khaimah 0.813
+/ 0.859, Sharjah/Dubai 0.832 / 0.849, Fujairah 0.873 / 0.873, Khor Fakkan
+0.832 / 0.820. The pre-agreed comparison remains the 40-pass one; on all 92
+passes the conclusion is the same, with the same-cell difference now
+outside its interval.
+
+**Product (2026-10-04).** Run 2 is the model `scripts/detect_window.py
+--detector model` runs by default (256 px tiles, 64 px overlap, threshold
+0.60), and `/api/detections` now returns one detector per pass by default
+(the model's where it ran, CFAR's elsewhere), so the map no longer counts
+vessels twice. Training and evaluation used S1A passes only; the product
+also runs on S1C and S1D, which is untested.
