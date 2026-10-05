@@ -2428,3 +2428,62 @@ reported (yes).
 The user accepted Phase 6 v1 as done on 2026-10-05 and chose to move to
 Phase 7; the refinements (pre-filter tuning, run 2 on stored passes, ghost and
 footprint filters, per-sub-swath R/V) move to Phase 8.
+
+### 2026-10-05 - Phase 7: the radar chip on the evidence card
+
+Phase 7 so far: dark-vessel rings and evidence cards on the map (`86d48a9`)
+and an alert feed in the rail (`618203b`). The user then chose the SAR chip
+as the next slice (over the timeline scrubber): each DARK_VESSEL card now
+shows what the radar saw, a north-up VV and VH image 2.56 km across (256
+pixels of 10 m, the GRD pixel spacing) centred on the detection, with the
+detection's tier ring, the nearest AIS vessels' hourly cells and gate
+tracks, a 500 m scale bar and a north arrow drawn over it.
+
+- Cut in batch, served from disk. `scripts/cut_chips.py` (also run by
+  `scripts/fuse_scene.py` once it has stored a pass's events; a chip failure
+  keeps the events) opens the pass's COG on CDSE once and reads one small
+  window per candidate and polarisation (about 310 pixels a side). Chips go
+  to `data/chips/<scene>/<lat>_<lon>_<pol>.png`, named by scene and position
+  because re-fusing a pass replaces its events (re-fused events take up the
+  chips already on disk without a CDSE read), and the card records
+  `chip.image` (polarisations, size, pixel, stretch, cut time, share of no
+  data); pixels the radar did not image are transparent and show as a
+  hatch. `GET /api/events/{id}/chip/{vv|vh}` serves the file: a browser
+  never causes a CDSE read, and the API still needs neither numpy nor
+  rasterio.
+- North up. GRD scenes are in radar geometry: the descending S1D pass of the
+  events shows the sea mirrored east-west and turned by the track angle.
+  Each chip pixel is located in the raster through the scene's control
+  points (the thin-plate spline the detections already use) and sampled
+  bilinearly; no-data pixels are never blended in.
+- Fixed logarithmic stretch per polarisation (VV 30-1500 DN, VH 15-750 DN,
+  set a priori from the sea levels measured in the Sentinel-1C/1D check;
+  display only), not a per-image percentile stretch, so a faint return
+  stays faint and chips of different passes compare.
+- Checks. On the pass's real control-point grid, tests place a bright pixel
+  500 m north, 500 m east, and 800 m south and 300 m west of a detection and
+  find it where a north-up chip puts it (within 2 pixels). On the 9 real
+  chips, the pass's other stored CFAR detections projected onto each chip
+  fall on bright returns (median grey 224-255 of 255), while the same
+  positions mirrored east-west read 19-154 and random points 20-49: the
+  chips agree with the scene's own geolocation (not an independent check of
+  it). Product run: 9 chips (VV and VH) for S1D 2026-09-10 Fujairah in about
+  a minute, none failed. In the browser: the card, the overlay against the
+  map, the VV/VH toggle, a missing chip file and a card without a chip.
+- Review: a four-lens multi-agent review (geometry, robustness, UI, tests;
+  each lens checked by an adversarial verifier) confirmed 16 findings (11
+  distinct issues; 3 refuted, 1 uncertain). The 4 of medium severity are two
+  issues with one cause, SQLite reusing event ids when a pass is re-fused.
+  Fixed: the console's chip URL names the chip's content (scene,
+  position, cut time) and the API sends no-cache; cards are written back only
+  if unchanged (compare and set); a chip that cannot be written fails alone;
+  AIS hours are drawn as their 0.01 degree cells in cyan (solid for the pass
+  hour), not as white dots that look like radar echoes or precise positions;
+  a failed image can be retried; out-of-range event ids get 422. Tests added
+  for the half-pixel convention (exact, on a linear raster) and for each
+  polarisation's stretch in the written PNGs; each new test was checked to
+  fail on the bug it guards (mutation). Not fixed: a process that used GDAL
+  can hang on exit on this host (documented in both scripts).
+- Limits: the chip shows the pass's radar return at 10 m spacing (about
+  20 m resolution), not identity; on this pass the events come from CFAR, so
+  the chip shows what CFAR detected, not the product model.
