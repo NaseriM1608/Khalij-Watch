@@ -534,6 +534,22 @@ def test_main_stops_at_a_gfw_lock_or_timeout_instead_of_sending_the_next_report(
     assert "stopped" in capsys.readouterr().out
 
 
+def test_main_says_when_the_report_never_reached_gfw(offline_main, capsys):
+    """A connection that never opened holds no GFW lock: the runner may retry soon."""
+    import httpx
+
+    m = offline_main
+    m.fail.add(m.scenes[0])
+    m.error = GfwError("Connection error.")
+    m.error.__cause__ = httpx.ConnectError("name resolution failed")
+
+    m.run("--model", f"a={m.models['a']}")
+
+    out = capsys.readouterr().out
+    assert m.compared == []
+    assert "stopped: GFW unreachable" in out
+
+
 def test_main_counts_an_unexpected_error_as_one_failed_pass(offline_main, capsys):
     """One pass that always fails must not keep every later pass from being compared."""
     m = offline_main

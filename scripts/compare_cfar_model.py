@@ -648,6 +648,7 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
     from gfwapiclient.exceptions import GFWAPIClientError
 
     from core.config import load_settings
+    from core.fusion.presence import failed_before_sending
     from core.labeling.gfw_api import stops_the_run
 
     load_settings()
@@ -678,10 +679,14 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
             result = compare_scene(area, scene_name, loaded, client)
         except GFWAPIClientError as exc:
             if stops_the_run(exc):
+                why = (
+                    "GFW unreachable (the report never reached it); rerun when the network is back"
+                    if failed_before_sending(exc)
+                    else "GFW may still be computing a report (one at a time); rerun in about 30 min"
+                )
                 print(
                     f"  {area} {scene_name[:40]} GFW {type(exc).__name__}: {str(exc)[:120]}\n"
-                    f"stopped: GFW may still be computing a report (one at a time); "
-                    f"{len(todo) - done} passes not compared; rerun in about 30 min",
+                    f"stopped: {why}; {len(todo) - done} passes not compared",
                     flush=True,
                 )
                 break
