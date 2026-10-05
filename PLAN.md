@@ -2487,3 +2487,53 @@ tracks, a 500 m scale bar and a north arrow drawn over it.
 - Limits: the chip shows the pass's radar return at 10 m spacing (about
   20 m resolution), not identity; on this pass the events come from CFAR, so
   the chip shows what CFAR detected, not the product model.
+
+### 2026-10-05 - Phase 7: the Iranian coast, and where the detector searched
+
+The user noticed that the console showed no ships on the Iranian side. Nothing
+excluded Iran (the land mask covers 44-62E, the platform mask includes South
+Pars and Kharg, and 73 of the 119 stored scenes reach north of 27N): detection
+had only been run on one Fujairah box for the console, and the five study
+boxes are all on the UAE side or in the strait. The console's AIS is a stale
+synthetic demo set (2026-09-10), so it shows no AIS ships anywhere. The user
+chose to run the product model on Iranian-side boxes now and to make the
+console say where detection actually ran.
+
+- Product model (run 2, frozen) on seven 20 km boxes, newest pass each
+  (`data/logs/run_detect_iran.sh`, about 4 min, CDSE only): Bandar Abbas
+  anchorage 69 detections (S1C 2026-10-03 02:14), Bushehr 12 and Kharg 10
+  (S1D 2026-10-04 14:41, 18 Kharg platforms masked), Larak/Hormuz 9 and Jask 1
+  (S1D 2026-10-04 02:06), Kish 6 and Assaluyeh 4 (S1D 2026-10-02 02:22). The
+  model was never validated on this coast. A visual check of three boxes
+  (Bandar Abbas, Bushehr, Kharg; north-up quicklooks in `data/qa/iran/`) found
+  every ring on a ship-like echo and none on the coast; ships alongside
+  Kharg's jetties are masked with the platforms, and some faint small echoes
+  are not ringed. Not a measurement: no GFW comparison was run there.
+- Every detection run now records its search (`analysed_windows`: pass,
+  detector, version, polarisation, box), also when it finds nothing.
+  `GET /api/analysed` serves each search as the requested box clipped to the
+  pass footprint, with the share of the box imaged: a box can reach beyond the
+  swath. Measured on the stored passes: the Fujairah study box is only 52%
+  imaged on the 02:14 UTC passes of 2026-09-27 and 10-03 (the swath ends near
+  56.535E at 25.22N), the Jask box 78%. A search counts as tested only for a
+  detector configuration measured against GFW (run 2 on VV+VH; CFAR on VH at
+  Pfa 1e-6) searching wholly inside one study box; run 1, other versions or
+  channels, and searches reaching outside a study box count as untested.
+  `/api/detections` marks each ring the same way. Searches of fused passes are
+  served whatever their age, as their dark-vessel candidates are: the
+  2026-09-10 pass (CFAR, box not recorded) has a conservative search area, the
+  extent of its stored detections, which the run certainly searched.
+- The console outlines searched areas (solid: tested; dashed: accuracy
+  unknown), fading with age, and says that outside them no ring means not
+  searched and that inside them no ring is not proof of no ship (tested
+  detectors found about 4 in 5 of the vessels GFW saw without AIS on test
+  passes). Of the 304 rings shown, 302 lie inside a searched area of their own
+  pass; 2 (2026-09-27, run 1) sit on the swath edge, within about 100 m of
+  CDSE's simplified footprint polygon.
+- Review: two lenses, each with an adversarial verifier (the UI verifier was
+  stopped by an API overload; its findings were checked by hand). Confirmed and
+  fixed: the whole requested box claimed as searched beyond the swath (high);
+  the fused pass without a search area; "tested" by box centre and by place
+  only (not by detector configuration); stale counts and replacement across
+  polarisations; wording that implied "searched, no ship"; a hidden error when
+  searches fail to load; counts and age not shown.
