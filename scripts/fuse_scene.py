@@ -6,11 +6,15 @@ over the box buffered by 25 km (cached under data/fusion/presence) and GFW's
 SAR detections for the pass, fuses them at the operating margin chosen on
 validation passes (models/runs/kaggle-v2/fusion_v1/summary.json, or
 --margin), and stores the dark-vessel events with their evidence cards,
-replacing this run's earlier events for the pass. GFW publishes presence
-about 96 h and SAR detections about 5 days after a pass, so younger passes
-are refused. Passes whose presence is missing or evidently incomplete give no
-events (core.fusion.events). One GFW report at a time; never alongside
-another GFW job.
+replacing this run's earlier events for the pass, then cuts each event's
+radar chip from the pass on CDSE (scripts/cut_chips.py; a chip failure keeps
+the events). GFW publishes presence about 96 h and SAR detections about 5
+days after a pass, so younger passes are refused. Passes whose presence is
+missing or evidently incomplete give no events (core.fusion.events). One GFW
+report at a time; never alongside another GFW job. Cutting chips reads CDSE
+through GDAL, which on this host can keep a process from exiting after a
+failed request (core/sar/reader.py): if the script hangs after its last line,
+the events and chips are stored and the process can be ended.
 
     uv run --offline --python 3.12 --no-project --with numpy --with scipy --with rasterio \
         --with boto3 --with sqlalchemy --with httpx --with gfw-api-python-client \
@@ -25,9 +29,10 @@ import datetime as dt
 import json
 import os
 import sys
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -102,6 +107,22 @@ async def _sar_refs(token: str, box, acquired: dt.datetime) -> list[tuple]:
     day = acquired.date()
     cells = await fetch_sar_cells(client, box, day, day + dt.timedelta(days=1))
     return [(c.lon, c.lat, c.detections, c.matched) for c in cells_for_pass(cells, acquired)]
+
+
+def cut_chips_after_fusion(
+    factory, scene_id: int, *, root: Path, cut: Callable[..., Any] | None = None
+) -> str:
+    """Cut the radar chips of the events just stored; the events stay stored whatever happens to them."""
+    if cut is None:
+        from scripts.cut_chips import cut_event_chips as cut
+    try:
+        result = cut(factory, scene_id, root=root)
+    except (RuntimeError, OSError, ValueError, LookupError) as exc:  # S3AccessError: Runtime
+        return f"  radar chips not cut ({exc}); retry with scripts/cut_chips.py"
+    return (
+        f"  {result.cut} radar chips cut, {result.reused} reused from disk, {result.failed} failed"
+        " (retry failures with scripts/cut_chips.py)"
+    )
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -197,6 +218,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     print(f"  {json.dumps(summary)}")
     print(
         f"  {written} DARK_VESSEL events stored (run {RUN}). Powered by Global Fishing Watch.",
+        flush=True,
+    )
+    print(
+        cut_chips_after_fusion(factory, stored.scene_id, root=settings.data_dir / "chips"),
         flush=True,
     )
     return 0

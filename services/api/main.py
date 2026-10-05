@@ -18,10 +18,13 @@ import asyncio
 import datetime as dt
 import logging
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, Literal
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnect
+from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
 
 from core.config import load_settings
 from core.db.repository import (
@@ -36,6 +39,7 @@ from core.db.repository import (
 )
 from core.db.session import create_all, create_db_engine, make_session_factory, session_scope
 from core.db.spatial import BBox
+from core.fusion.chips import chip_file
 from core.sar.catalogue import parse_polygon_wkt
 
 logger = logging.getLogger(__name__)
@@ -309,6 +313,38 @@ async def events(
         "attribution": "Powered by Global Fishing Watch (CC BY-NC 4.0); "
         "contains modified Copernicus Sentinel data",
     }
+
+
+# SQLite's largest INTEGER: a larger id cannot even be looked up.
+MAX_EVENT_ID = 2**63 - 1
+
+
+@app.get("/api/events/{event_id}/chip/{pol}")
+async def event_chip(
+    pol: Literal["vv", "vh"], event_id: int = PathParam(ge=1, le=MAX_EVENT_ID)
+) -> FileResponse:
+    """An event's radar chip: north up, 10 m pixels, a fixed dB stretch (core/fusion/chips.py).
+
+    Cut in batch from the pass on CDSE (scripts/cut_chips.py) and served from
+    disk, so a browser never causes a CDSE read; 404 until it is cut. The card
+    (``evidence.chip.image``) says which polarisations exist. Always
+    revalidated: re-fusing a pass can give an event id to another detection.
+    """
+    with session_scope(_sessions()) as session:
+        event = EventRepository(session).get(event_id)
+    if event is None:
+        raise HTTPException(status_code=404, detail=f"unknown event {event_id}")
+    path = chip_file(_chips_root(), event.evidence, pol)
+    if path is None:
+        raise HTTPException(
+            status_code=404, detail=f"no {pol} radar chip stored for event {event_id}"
+        )
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-cache"})
+
+
+def _chips_root() -> Path:
+    settings = _state.get("settings")
+    return (settings.data_dir if settings else Path("data")) / "chips"
 
 
 def _event_to_json(event: EventView, now: dt.datetime) -> dict[str, Any]:

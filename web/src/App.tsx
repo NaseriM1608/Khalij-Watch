@@ -22,12 +22,14 @@ import {
   DetectionsResponse,
   EventsResponse,
   Health,
+  Polarisation,
   RADAR_COLOUR,
   SarDetection,
   ScenesResponse,
   Track,
   Vessel,
   api,
+  chipPixel,
   classOf,
   coverageColour,
   formatAge,
@@ -44,6 +46,8 @@ const NO_EVENTS: AnalystEvent[] = [];
 const TIERS: ConfidenceTier[] = ["high", "medium", "low"];
 // The feed lists this many candidates; the count above it says how many exist.
 const FEED_LENGTH = 25;
+// The chip's scale bar: about two large tankers end to end, a fifth of the chip.
+const CHIP_SCALE_BAR_M = 500;
 const ALL_CLASSES: (CoarseClass | "unknown")[] = [
   "cargo_tanker",
   "fishing",
@@ -651,6 +655,138 @@ function formatMetres(metres: number | null): string {
   return metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.round(metres)} m`;
 }
 
+/** An AIS presence cell is 0.01 degree: about 1 km, where the vessel was during that hour. */
+const AIS_CELL_DEG = 0.01;
+
+function hourStart(iso: string): number {
+  const time = new Date(iso).getTime();
+  return time - (time % 3_600_000);
+}
+
+/**
+ * What the radar saw around a candidate: the chip cut from its pass
+ * (scripts/cut_chips.py), north up, with the evidence drawn on it - the
+ * detection's ring and the nearest AIS vessels' hourly cells and tracks.
+ * AIS is drawn in cyan, never white, so it cannot be taken for a radar echo.
+ */
+function SarChip({ event }: { event: AnalystEvent }) {
+  const { chip, nearest_ais: nearest } = event.evidence;
+  const image = chip.image;
+  const [choice, setChoice] = useState<Polarisation>("vv");
+  const [failedUrl, setFailedUrl] = useState<string | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  if (!image || !image.north_up || image.pols.length === 0) {
+    return <p className="sar-chip-missing">No radar image stored for this candidate yet.</p>;
+  }
+
+  const pol = image.pols.includes(choice) ? choice : image.pols[0];
+  const url = api.chipUrl(event.id, pol, chip, attempt);
+  const size = image.size_px;
+  const toPx = (lon: number, lat: number) =>
+    chipPixel(lon, lat, chip.lon, chip.lat, image.pixel_m, size);
+  const bar = CHIP_SCALE_BAR_M / image.pixel_m;
+  const acrossKm = ((size * image.pixel_m) / 1000).toFixed(2);
+  const passHour = hourStart(event.ts);
+  const half = AIS_CELL_DEG / 2;
+  const partlyBlind = image.no_data == null || image.no_data > 0;
+  return (
+    <figure className="sar-chip">
+      <div className="chip-frame">
+        {failedUrl === url ? (
+          <div className="chip-error">
+            <p>The radar image could not be loaded.</p>
+            <button onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+          </div>
+        ) : (
+          <>
+            <img
+              src={url}
+              alt={`Radar image (${pol.toUpperCase()}) ${acrossKm} km across, north up, centred on the candidate`}
+              onError={() => setFailedUrl(url)}
+            />
+            <svg viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
+              {nearest.map((vessel) => {
+                const name = vessel.ship_name ?? (vessel.mmsi ? `MMSI ${vessel.mmsi}` : "unnamed");
+                const track = vessel.track ?? vessel.cells.map((c) => [c.lon, c.lat]);
+                return (
+                  <g key={vessel.vessel_id}>
+                    {vessel.cells.map((cell) => {
+                      const [x0, y0] = toPx(cell.lon - half, cell.lat + half);
+                      const [x1, y1] = toPx(cell.lon + half, cell.lat - half);
+                      const atPass = hourStart(cell.hour) === passHour;
+                      const hour = new Date(cell.hour).toISOString().slice(11, 16);
+                      return (
+                        <rect
+                          key={cell.hour}
+                          className={`chip-ais-cell${atPass ? " pass-hour" : ""}`}
+                          x={x0}
+                          y={y0}
+                          width={x1 - x0}
+                          height={y1 - y0}
+                        >
+                          <title>
+                            {`${name}: AIS cell at ${hour} UTC${atPass ? " (the pass hour)" : ""}`}
+                          </title>
+                        </rect>
+                      );
+                    })}
+                    {track.length > 1 && (
+                      <polyline
+                        className="chip-ais-track"
+                        points={track.map(([lon, lat]) => toPx(lon, lat).join(",")).join(" ")}
+                      />
+                    )}
+                  </g>
+                );
+              })}
+              <circle
+                className="chip-ring"
+                cx={size / 2}
+                cy={size / 2}
+                r={12}
+                stroke={DARK_COLOURS[tierOf(event)]}
+              />
+              <g className="chip-scale" transform={`translate(10 ${size - 10})`}>
+                <line x1={0} y1={0} x2={bar} y2={0} />
+                <text x={bar / 2} y={-5}>
+                  {CHIP_SCALE_BAR_M} m
+                </text>
+              </g>
+              <g className="chip-north" transform={`translate(${size - 18} 8)`}>
+                <path d="M5 0 L10 13 L5 10 L0 13 Z" />
+                <text x={5} y={25}>
+                  N
+                </text>
+              </g>
+            </svg>
+          </>
+        )}
+      </div>
+      {image.pols.length > 1 && (
+        <div className="chip-pols" role="group" aria-label="Radar polarisation">
+          {image.pols.map((p) => (
+            <button
+              key={p}
+              aria-pressed={p === pol}
+              className={p === pol ? "selected" : ""}
+              onClick={() => setChoice(p)}
+            >
+              {p.toUpperCase()}
+            </button>
+          ))}
+        </div>
+      )}
+      <figcaption>
+        What the radar saw, {acrossKm} km across, north up. Bright means a strong
+        echo, as from a steel hull; the ring marks the detection. Cyan squares are
+        the nearest AIS vessels&rsquo; hourly cells (about 1 km: the vessel was
+        somewhere inside during that hour; solid for the pass hour).
+        {partlyBlind && " Hatched areas were not imaged by the radar."}
+      </figcaption>
+    </figure>
+  );
+}
+
 function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: () => void }) {
   const evidence = event.evidence;
   const tier = tierOf(event);
@@ -666,6 +802,8 @@ function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: ()
       </p>
 
       <div className="age-badge">Radar pass {formatAge(event.age_hours * 3600)}</div>
+
+      <SarChip key={event.id} event={event} />
 
       <div className="why-dark">
         <h3>Why dark</h3>

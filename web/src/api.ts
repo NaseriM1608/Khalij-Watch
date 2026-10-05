@@ -165,6 +165,22 @@ export interface NearestAis {
 /** GFW's own radar verdict for the candidate's 0.01 degree cell. */
 export type GfwCellState = "matched" | "unmatched" | "mixed" | "none" | "no_gfw_data" | "untrusted";
 
+export type Polarisation = "vv" | "vh";
+
+/** A radar chip cut for the card (core/fusion/chips.py): north up, square, at a fixed scale. */
+export interface ChipImage {
+  pols: Polarisation[];
+  size_px: number;
+  pixel_m: number;
+  north_up: boolean;
+  /** Fixed logarithmic stretch: the DN shown as black and as white, per polarisation. */
+  stretch_dn: Partial<Record<Polarisation, [number, number]>>;
+  /** When the chip file was written: versions the image, since event ids can be reused. */
+  cut_at?: string | null;
+  /** Share of the chip the radar did not image (transparent pixels); null if unknown. */
+  no_data?: number | null;
+}
+
 /** Why a detection was called dark (core/fusion/evidence.py). */
 export interface DarkEvidence {
   status: "dark";
@@ -195,7 +211,8 @@ export interface DarkEvidence {
     gfw_refs?: number;
   };
   datasets: string[];
-  chip: { scene: string; lon: number; lat: number };
+  /** The detection in its pass; `image` once its chip was cut (scripts/cut_chips.py). */
+  chip: { scene: string; lon: number; lat: number; image?: ChipImage };
   attribution: string;
 }
 
@@ -252,7 +269,40 @@ export const api = {
   detections: (days = 14) =>
     getJson<DetectionsResponse>(`/api/detections?days=${days}`),
   darkVessels: () => getJson<EventsResponse>("/api/events?type=DARK_VESSEL"),
+  /**
+   * Served from disk; the browser never causes a read of the radar scene itself.
+   * The query names the chip's content (scene, position, cut time), so an event
+   * id that re-fusion gave to another detection can never show a cached image.
+   */
+  chipUrl: (eventId: number, pol: Polarisation, chip: DarkEvidence["chip"], attempt = 0) => {
+    const params = new URLSearchParams({
+      v: `${chip.scene}/${chip.lat}_${chip.lon}/${chip.image?.cut_at ?? ""}`,
+    });
+    if (attempt > 0) params.set("attempt", String(attempt));
+    return `/api/events/${eventId}/chip/${pol}?${params}`;
+  },
 };
+
+// As in core/geo.py, so overlays land where core/sar/display.py sampled.
+const EARTH_RADIUS_M = 6_371_008.8;
+
+/**
+ * Where a position falls on a north-up chip centred on (lon0, lat0), in chip
+ * pixels from the top-left corner (core/sar/display.py north_up_grid).
+ */
+export function chipPixel(
+  lon: number,
+  lat: number,
+  lon0: number,
+  lat0: number,
+  pixelM: number,
+  sizePx: number,
+): [number, number] {
+  const rad = Math.PI / 180;
+  const east = (lon - lon0) * rad * EARTH_RADIUS_M * Math.cos(lat0 * rad);
+  const north = (lat - lat0) * rad * EARTH_RADIUS_M;
+  return [sizePx / 2 + east / pixelM, sizePx / 2 - north / pixelM];
+}
 
 /**
  * Dark-vessel candidates outrank everything on the map. The tier says how far

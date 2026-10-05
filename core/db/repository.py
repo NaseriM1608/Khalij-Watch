@@ -378,6 +378,10 @@ class SceneRepository:
             select(SarScene.id).where(SarScene.product_id == product_id)
         ).scalar_one_or_none()
 
+    def get(self, scene_id: int) -> SarScene | None:
+        """One stored scene by database id, with the object-storage path of its image."""
+        return self._session.get(SarScene, scene_id)
+
     def intersecting(
         self,
         bbox: BBox,
@@ -702,19 +706,56 @@ class EventRepository:
         if event_type is not None:
             query = query.where(Event.event_type == event_type)
         query = query.order_by(Event.ts.desc(), Event.id).limit(limit)
-        return [
-            EventView(
-                id=e.id,
-                event_type=e.event_type,
-                ts=_as_utc(e.ts),
-                lon=e.lon,
-                lat=e.lat,
-                severity=e.severity,
-                detection_id=e.detection_id,
-                scene_id=e.scene_id,
-                run=e.run,
-                evidence=e.evidence,
-                acknowledged=e.acknowledged,
-            )
-            for e in self._session.execute(query).scalars()
-        ]
+        return [_event_view(e) for e in self._session.execute(query).scalars()]
+
+    def get(self, event_id: int) -> EventView | None:
+        """One event by id."""
+        event = self._session.get(Event, event_id)
+        return None if event is None else _event_view(event)
+
+    def for_scene(self, scene_id: int, run: str) -> list[EventView]:
+        """One fusion run's events of a pass, in the order they were stored."""
+        query = select(Event).where(Event.scene_id == scene_id, Event.run == run).order_by(Event.id)
+        return [_event_view(e) for e in self._session.execute(query).scalars()]
+
+    def scene_ids(self, run: str) -> list[int]:
+        """The passes holding events of one fusion run."""
+        query = (
+            select(Event.scene_id)
+            .where(Event.run == run, Event.scene_id.is_not(None))
+            .distinct()
+            .order_by(Event.scene_id)
+        )
+        return list(self._session.execute(query).scalars())
+
+    def update_evidence(self, event_id: int, *, expected: dict, evidence: dict) -> bool:
+        """Replace an event's card, e.g. to record its radar chip, only if it is still ``expected``.
+
+        Compare and set: re-fusing a pass deletes its events and SQLite may give
+        their ids to new ones, so a writer holding an old card changes nothing
+        (False). A card is never emptied.
+        """
+        if not evidence:
+            raise ValueError(f"event {event_id} cannot lose its evidence")
+        event = self._session.get(Event, event_id)
+        if event is None or event.evidence != expected:
+            return False
+        event.evidence = dict(evidence)
+        self._session.flush()
+        return True
+
+
+def _event_view(e: Event) -> EventView:
+    return EventView(
+        id=e.id,
+        event_type=e.event_type,
+        ts=_as_utc(e.ts),
+        lon=e.lon,
+        lat=e.lat,
+        severity=e.severity,
+        detection_id=e.detection_id,
+        scene_id=e.scene_id,
+        run=e.run,
+        evidence=e.evidence,
+        acknowledged=e.acknowledged,
+    )

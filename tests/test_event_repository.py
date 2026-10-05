@@ -120,3 +120,49 @@ def test_an_event_without_evidence_is_refused_and_nothing_is_written(session):
     with pytest.raises(ValueError, match="evidence"):
         repo.replace_for_scene(scene_id, "fusion-v1", [dark(56.50, 25.20), unexplained])
     assert repo.in_bbox(BOX) == []
+
+
+def test_one_event_is_read_by_id(session):
+    repo = EventRepository(session)
+    repo.replace_for_scene(scene(session), "fusion-v1", [dark(56.50, 25.20)])
+    (stored,) = repo.in_bbox(BOX)
+    assert repo.get(stored.id) == stored
+    assert repo.get(stored.id + 1) is None
+
+
+def test_a_passes_events_of_one_run_are_listed_in_id_order(session):
+    repo = EventRepository(session)
+    first, second = scene(session, "S1C_A"), scene(session, "S1C_B")
+    repo.replace_for_scene(first, "fusion-v1", [dark(56.50, 25.20), dark(56.51, 25.21)])
+    repo.replace_for_scene(first, "fusion-v0", [dark(56.52, 25.22)])
+    repo.replace_for_scene(second, "fusion-v1", [dark(56.53, 25.23)])
+    listed = repo.for_scene(first, "fusion-v1")
+    assert [e.lon for e in listed] == [56.50, 56.51]
+    assert [e.id for e in listed] == sorted(e.id for e in listed)
+    assert sorted(repo.scene_ids("fusion-v1")) == sorted([first, second])
+    assert repo.scene_ids("fusion-v0") == [first]
+
+
+def test_an_events_evidence_is_completed_only_if_unchanged_and_never_emptied(session):
+    """Compare and set: the card is replaced only if it is still the one the caller read."""
+    repo = EventRepository(session)
+    repo.replace_for_scene(scene(session), "fusion-v1", [dark(56.50, 25.20)])
+    (stored,) = repo.in_bbox(BOX)
+    completed = {**stored.evidence, "chip": {"image": {"pols": ["vv"]}}}
+    assert repo.update_evidence(stored.id, expected=stored.evidence, evidence=completed)
+    assert repo.get(stored.id).evidence == completed
+    # A writer still holding the old card changes nothing.
+    stale = {**stored.evidence, "chip": {"image": {"pols": ["vh"]}}}
+    assert not repo.update_evidence(stored.id, expected=stored.evidence, evidence=stale)
+    assert repo.get(stored.id).evidence == completed
+    assert not repo.update_evidence(stored.id + 1, expected=completed, evidence=completed)
+    with pytest.raises(ValueError, match="evidence"):
+        repo.update_evidence(stored.id, expected=completed, evidence={})
+    assert repo.get(stored.id).evidence == completed
+
+
+def test_a_scene_is_read_by_id_with_its_image_path(session):
+    scene_id = scene(session, "S1C_A")
+    stored = SceneRepository(session).get(scene_id)
+    assert (stored.product_name, stored.cog_url) == ("S1C_A", "/eodata/Sentinel-1/x")
+    assert SceneRepository(session).get(scene_id + 1) is None

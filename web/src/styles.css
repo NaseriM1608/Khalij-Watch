@@ -353,3 +353,72 @@ body {
 .dark-feed .ring { margin-top: 2px; }
 .feed-text { display: grid; gap: 1px; min-width: 0; }
 .feed-sub { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+
+/* The radar chip on a dark-vessel card: what the radar saw, evidence drawn over it. */
+.sar-chip { margin: 0 0 14px; }
+.chip-frame {
+  position: relative;
+  aspect-ratio: 1;
+  /* Shows through the chip's transparent pixels: where the radar did not image. */
+  background: repeating-linear-gradient(45deg, #0b0f16 0 5px, #2a3342 5px 6px);
+  border: 1px solid var(--line);
+  border-radius: 5px;
+  overflow: hidden;
+}
+.chip-frame img,
+.chip-frame svg { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.chip-ring { fill: none; stroke-width: 2; }
+/* AIS on the chip is cyan, never white: white is what the radar saw. */
+.chip-ais-track { fill: none; stroke: #22d3ee; stroke-width: 1.3; stroke-dasharray: 4 3; opacity: 0.9; }
+.chip-ais-cell { fill: none; stroke: #22d3ee; stroke-width: 1; stroke-dasharray: 3 3; opacity: 0.8; }
+.chip-ais-cell.pass-hour { fill: rgba(34, 211, 238, 0.12); stroke-dasharray: none; opacity: 1; }
+.chip-scale line { stroke: #fff; stroke-width: 2; }
+.chip-scale text,
+.chip-north text {
+  fill: #fff;
+  font-size: 10px;
+  text-anchor: middle;
+  paint-order: stroke;
+  stroke: rgba(0, 0, 0, 0.85);
+  stroke-width: 3px;
+}
+.chip-north path { fill: #fff; stroke: rgba(0, 0, 0, 0.85); stroke-width: 1; }
+.chip-error {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: 8px;
+  padding: 16px;
+  font-size: 11px;
+  color: var(--muted);
+  text-align: center;
+  background: #000;
+}
+.chip-error p { margin: 0; }
+.chip-pols { display: flex; gap: 4px; margin-top: 6px; }
+.chip-error button,
+.chip-pols button {
+  padding: 2px 9px;
+  font: inherit;
+  font-size: 10px;
+  letter-spacing: 0.06em;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  cursor: pointer;
+}
+.chip-pols button:hover { color: var(--text); }
+.chip-pols button.selected { color: var(--text); border-color: rgba(255, 255, 255, 0.5); }
+.sar-chip figcaption { margin-top: 6px; font-size: 10px; color: var(--muted); line-height: 1.45; }
+.sar-chip-missing {
+  margin: 0 0 14px;
+  padding: 10px 12px;
+  font-size: 11px;
+  color: var(--muted);
+  background: var(--panel-2);
+  border: 1px dashed var(--line);
+  border-radius: 5px;
+}

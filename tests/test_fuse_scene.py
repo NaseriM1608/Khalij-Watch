@@ -9,11 +9,13 @@ newest pass old enough is taken, or the one named (PLAN §17, 2026-10-04
 from __future__ import annotations
 
 import datetime as dt
+from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from core.db.repository import DetectionView
-from scripts.fuse_scene import pick_pass
+from scripts.fuse_scene import cut_chips_after_fusion, pick_pass
 
 NOW = dt.datetime(2026, 10, 5, 2, 0, tzinfo=dt.UTC)
 
@@ -77,3 +79,27 @@ def test_model_detections_from_an_older_model_version_are_not_used():
     cfar = view(10, 5, OLD, "S1D_OLD", detector="cfar")
     chosen = pick_pass([stale, cfar], now=NOW)
     assert chosen.product_name == "S1D_OLD"
+
+
+def test_chips_are_cut_after_fusion_and_reported():
+    calls = []
+
+    def cut(factory, scene_id, *, root):
+        calls.append((factory, scene_id, root))
+        return SimpleNamespace(cut=8, reused=2, skipped=0, failed=1)
+
+    message = cut_chips_after_fusion("factory", 5, root=Path("chips"), cut=cut)
+    assert calls == [("factory", 5, Path("chips"))]
+    assert "8 radar chips cut" in message and "2 reused" in message and "1 failed" in message
+
+
+@pytest.mark.parametrize(
+    "error", [RuntimeError("network: down"), OSError("disk"), ValueError("x"), LookupError("y")]
+)
+def test_a_chip_failure_keeps_the_stored_events_and_says_how_to_retry(error):
+    def cut(*_args, **_kwargs):
+        raise error
+
+    message = cut_chips_after_fusion("factory", 5, root=Path("chips"), cut=cut)
+    assert "not cut" in message and str(error) in message
+    assert "scripts/cut_chips.py" in message
