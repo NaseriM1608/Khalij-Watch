@@ -564,12 +564,16 @@ def test_main_counts_an_unexpected_error_as_one_failed_pass(offline_main, capsys
     assert "1 passes failed" in out
 
 
-def test_main_gives_a_gfw_report_longer_than_gfws_own_gateway_timeout(offline_main):
+def test_main_gives_each_pass_its_own_gfw_client_with_a_long_timeout(offline_main):
+    """Each pass runs its own event loop; a client's pooled connection dies with the loop.
+
+    The timeout is longer than GFW's own gateway (about 100 s, then 524).
+    """
     m = offline_main
 
     m.run("--model", f"a={m.models['a']}")
 
-    assert m.clients == [{"access_token": "not-a-token", "timeout": 180.0}]
+    assert m.clients == [{"access_token": "not-a-token", "timeout": 180.0}] * len(m.scenes)
 
 
 def test_main_treats_a_catalogue_outage_as_one_failed_pass(offline_main, capsys):

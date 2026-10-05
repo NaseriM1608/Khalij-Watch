@@ -661,7 +661,7 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
         for spec in specs
     ]
     wanted = {spec.label: prov for spec, prov, _ in loaded}
-    client = gfwapiclient.Client(access_token=os.environ["GFW_API_TOKEN"], timeout=GFW_TIMEOUT_S)
+    token = os.environ["GFW_API_TOKEN"]
     args.out.mkdir(parents=True, exist_ok=True)
     if args.pairs:
         pairs, split = read_pairs(args.pairs), args.pairs.stem
@@ -676,6 +676,9 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
     failed = 0
     for done, (area, scene_name) in enumerate(todo):
         try:
+            # A client per pass: each pass runs its own event loop (asyncio.run), and a
+            # reused client's pooled connection dies with the previous loop.
+            client = gfwapiclient.Client(access_token=token, timeout=GFW_TIMEOUT_S)
             result = compare_scene(area, scene_name, loaded, client)
         except GFWAPIClientError as exc:
             if stops_the_run(exc):
