@@ -2537,3 +2537,41 @@ console say where detection actually ran.
   only (not by detector configuration); stale counts and replacement across
   polarisations; wording that implied "searched, no ship"; a hidden error when
   searches fail to load; counts and age not shown.
+
+### 2026-10-05 - Phase 7: the model's detections, each with its satellite image
+
+The user set the thesis focus: vessels the deep-learning model finds in
+Sentinel-1 satellite images, each shown with its image beside it. (The
+product model has no class, length or heading output: only objectness and
+a sub-pixel offset, the other heads left out for lack of trustworthy labels,
+`training/model.py`.) The user chose "model + image" over keeping CFAR on the
+map or moving to optical imagery.
+
+- Console: the product model's detections only (run 2, `kaggle-v2`); CFAR and
+  run 1 leave the map and stay in the thesis comparisons. Clicking a detection
+  opens a card with its north-up VV/VH image 2.56 km across, the model score
+  (kept from 0.60), the pass and its age, and whether the model was tested
+  there, worded as a detection (likely a vessel): in a study box, about 3 in 4
+  of its detections matched a vessel GFW saw and it found over 9 in 10 of
+  those (precision 0.72-0.76, recall 0.93-0.98 on the 40 test passes);
+  elsewhere its false alarms and misses were never measured.
+- Chips while detecting: `scripts/detect_window.py` cuts each stored
+  detection's chip from the pixels it already read for detection; only chips
+  reaching beyond them are read from the scene (the 2026-09-10 run: 168 of
+  170 from memory, 2 read again near the box edge). `scripts/cut_chips.py
+  --detections` cut the 207 existing product detections' chips (0 failed).
+  Chips are named by scene and position, shared with the dark-vessel cards.
+- The 2026-09-10 Fujairah pass, whose dark-vessel candidates had come from
+  CFAR, was run with the product model (`--scene`, 170 detections) and fused
+  again: 163 kept, 9 DARK_VESSEL events (8 low, 1 medium), at the CFAR
+  candidates' positions to within a few metres, all with chips (reused from
+  disk, no extra read).
+- API: `/api/detections?detector=product`, with each detection's chip status
+  from one folder listing per scene (about 40 ms for 377 detections) and
+  fused passes included whatever their age; `GET
+  /api/detections/{id}/chip/{pol}` (a stale content key gets 404).
+- Review: two lenses with adversarial verification; all 10 confirmed findings
+  fixed (high: the 14-day lookback hid the fused pass's 170 detections while
+  its candidates and searched area stayed on the map). The final selection
+  fix was checked by type-check and build only (browser pane hidden); the
+  card itself was verified in the browser before it.
