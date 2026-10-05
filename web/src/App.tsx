@@ -42,6 +42,8 @@ const RADAR_LOOKBACK_DAYS = 14;
 const NO_DETECTIONS: SarDetection[] = [];
 const NO_EVENTS: AnalystEvent[] = [];
 const TIERS: ConfidenceTier[] = ["high", "medium", "low"];
+// The feed lists this many candidates; the count above it says how many exist.
+const FEED_LENGTH = 25;
 const ALL_CLASSES: (CoarseClass | "unknown")[] = [
   "cargo_tanker",
   "fishing",
@@ -177,6 +179,18 @@ export default function App() {
       return next;
     });
   }, []);
+
+  // Newest pass first, then the most confident: what an analyst should look at first.
+  const feed = useMemo(
+    () =>
+      [...(dark?.events ?? [])]
+        .sort(
+          (a, b) =>
+            b.ts.localeCompare(a.ts) || TIERS.indexOf(tierOf(a)) - TIERS.indexOf(tierOf(b)),
+        )
+        .slice(0, FEED_LENGTH),
+    [dark],
+  );
 
   const darkCounts = useMemo(() => {
     const tally = new Map<ConfidenceTier, number>();
@@ -345,6 +359,40 @@ export default function App() {
               </li>
             ))}
           </ul>
+          {showDark && feed.length > 0 && (
+            <ol className="dark-feed" aria-label="Dark-vessel candidates, newest pass first">
+              {feed.map((event) => (
+                <li key={event.id}>
+                  <button
+                    className={event.id === selectedEventId ? "selected" : ""}
+                    onClick={() => selectEvent(event.id)}
+                  >
+                    <span
+                      className="ring ring-dark"
+                      style={{ borderColor: DARK_COLOURS[tierOf(event)] }}
+                    />
+                    <span className="feed-text">
+                      <span>
+                        {event.ts.slice(0, 16).replace("T", " ")} UTC ·{" "}
+                        {formatAge(event.age_hours * 3600)}
+                      </span>
+                      <span className="feed-sub">
+                        {event.lat?.toFixed(3)}°, {event.lon?.toFixed(3)}° ·{" "}
+                        {event.evidence.gate.nearest_gap_m == null
+                          ? "no AIS vessel near"
+                          : `${Math.round(event.evidence.gate.nearest_gap_m)} m outside nearest AIS gate`}
+                      </span>
+                    </span>
+                  </button>
+                </li>
+              ))}
+            </ol>
+          )}
+          {(dark?.count ?? 0) > FEED_LENGTH && (
+            <p className="hint">
+              Showing the {FEED_LENGTH} newest of {dark?.count}; all are on the map.
+            </p>
+          )}
           {darkError && <p className="error">{darkError}</p>}
         </section>
 

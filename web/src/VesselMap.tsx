@@ -519,7 +519,12 @@ export function VesselMap({
     if (!instance || !loaded || selectedId == null || selectedLon == null || selectedLat == null) {
       return;
     }
-    instance.easeTo({ center: [selectedLon, selectedLat], duration: 600 });
+    // Zoom in far enough to tell the candidate from its neighbours; never zoom out.
+    instance.easeTo({
+      center: [selectedLon, selectedLat],
+      zoom: Math.max(instance.getZoom(), 11),
+      duration: 600,
+    });
     // Coordinates are read with the id; a refresh of the same event must not re-centre.
   }, [selectedId, loaded]);
 
