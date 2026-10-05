@@ -30,6 +30,7 @@ from core.labeling.gfw_api import box_polygon, is_transient, with_retries
 
 # H-1, H and H+1 around the pass hour H.
 WINDOW_HOURS = 3
+_HOUR = dt.timedelta(hours=1)
 
 
 class _GfwHour(dt.datetime):
@@ -63,18 +64,49 @@ class PresenceFix:
     ship_name: str | None = None
     flag: str | None = None
     vessel_type: str | None = None
+    # The served dataset version, e.g. 'public-global-presence:v4.0' (requests ask for ':latest').
+    report_dataset: str | None = None
 
 
 @dataclass(frozen=True)
 class HourlyTrack:
-    """A vessel's fixes in the hours H-1, H and H+1 around a pass, ordered by hour."""
+    """A vessel's fixes in the hours H-1, H and H+1 around a pass, ordered by hour.
+
+    ``pass_hour`` is H; ``pass_fraction`` is how far into H the pass was (0..1).
+    """
 
     vessel_id: str
     fixes: tuple[PresenceFix, ...]
+    pass_hour: dt.datetime | None = None
+    pass_fraction: float = 0.0
 
     @property
     def vertices(self) -> list[tuple[float, float]]:
         return [(f.lon, f.lat) for f in self.fixes]
+
+    @property
+    def gate_vertices(self) -> list[tuple[float, float]]:
+        """The polyline the gate measures to, reaching the pass time.
+
+        A fix in hour H lies somewhere in [H, H+1). A vessel seen only at H-1
+        and H can be up to ``pass_fraction`` of an hour of travel beyond its H
+        cell at the pass, and one seen only at H and H+1 up to the rest of the
+        hour before it, so those tracks are extended along their direction.
+        Tracks with H-1 and H+1 already span the pass; single fixes cannot be
+        extended.
+        """
+        vertices = self.vertices
+        if self.pass_hour is None or len(self.fixes) != 2:
+            return vertices
+        offsets = [f.hour - self.pass_hour for f in self.fixes]
+        (x0, y0), (x1, y1) = vertices
+        if offsets == [-_HOUR, dt.timedelta(0)]:
+            f = self.pass_fraction
+            return [*vertices, (x1 + f * (x1 - x0), y1 + f * (y1 - y0))]
+        if offsets == [dt.timedelta(0), _HOUR]:
+            g = 1.0 - self.pass_fraction
+            return [(x0 - g * (x1 - x0), y0 - g * (y1 - y0)), *vertices]
+        return vertices
 
     @property
     def sparse(self) -> bool:
@@ -90,8 +122,9 @@ class HourlyTrack:
     def speed_mps(self) -> float | None:
         """The fastest cell-to-cell displacement per elapsed time; None for a single fix.
 
-        A lower bound in practice: a vessel moving less than a cell an hour
-        shows zero, and the sampled minute within each hour is unknown.
+        An estimate that can err either way: a vessel moving less than a cell
+        an hour shows zero, and the sampled minute within each hour is
+        unknown, so two fixes can be less or more than an hour apart in time.
         """
         if self.sparse:
             return None
@@ -120,6 +153,7 @@ def parse_presence_rows(rows: Iterable[dict]) -> list[PresenceFix]:
                 ship_name=row.get("ship_name") or None,
                 flag=row.get("flag") or None,
                 vessel_type=row.get("vessel_type") or None,
+                report_dataset=row.get("report_dataset") or None,
             )
         )
     return fixes
@@ -136,12 +170,19 @@ def presence_window(acquired: dt.datetime) -> tuple[dt.datetime, dt.datetime]:
 def hourly_tracks(fixes: Iterable[PresenceFix], acquired: dt.datetime) -> list[HourlyTrack]:
     """One track per vessel from its fixes inside the pass window (the first fix of an hour wins)."""
     start, end = presence_window(acquired)
+    pass_hour = start + _HOUR
+    fraction = (acquired - pass_hour).total_seconds() / _HOUR.total_seconds()
     by_vessel: dict[str, dict[dt.datetime, PresenceFix]] = defaultdict(dict)
     for f in fixes:
         if start <= f.hour < end:
             by_vessel[f.vessel_id].setdefault(f.hour, f)
     return [
-        HourlyTrack(vessel_id=vessel_id, fixes=tuple(hours[h] for h in sorted(hours)))
+        HourlyTrack(
+            vessel_id=vessel_id,
+            fixes=tuple(hours[h] for h in sorted(hours)),
+            pass_hour=pass_hour,
+            pass_fraction=fraction,
+        )
         for vessel_id, hours in sorted(by_vessel.items())
     ]
 

@@ -238,3 +238,14 @@ async def test_fetch_retries_transient_failures():
     )
     assert len(client.fourwings.calls) == 3
     assert len(fixes) == 1
+
+
+def test_the_report_dataset_version_survives_parsing():
+    (parsed,) = parse_presence_rows([row(report_dataset="public-global-presence:v4.0")])
+    assert parsed.report_dataset == "public-global-presence:v4.0"
+
+
+def test_tracks_know_the_pass_hour_and_its_fraction():
+    (track,) = hourly_tracks([fix(hour=14)], PASS)
+    assert track.pass_hour == dt.datetime(2026, 9, 25, 14, tzinfo=dt.UTC)
+    assert track.pass_fraction == pytest.approx((15 * 60 + 51) / 3600)

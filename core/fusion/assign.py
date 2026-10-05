@@ -1,10 +1,11 @@
 """One-to-one assignment of gated SAR-AIS candidates, keeping the candidate sets.
 
 The gate lists, per detection, every AIS vessel whose hourly track passes
-within reach. Detections and vessels are then paired one-to-one by minimum
-total gate score with ``scipy.optimize.linear_sum_assignment``: greedy
-nearest-neighbour fails in dense anchorages (PLAN §9), and pairs outside every
-gate get a large finite cost and are dropped afterwards. Cell-hour fusion is
+within reach. Detections and vessels are then paired one-to-one with
+``scipy.optimize.linear_sum_assignment``: greedy nearest-neighbour fails in
+dense anchorages (PLAN §9). Pairs outside every gate get a large finite cost
+and are dropped afterwards, so the solver first maximises the number of pairs
+inside a gate, then minimises their total gate score. Cell-hour fusion is
 often not unique - at the busy Fujairah pass of 2026-09-25 the 140 AIS vessels
 of the pass hour sat in 111 cells and the median distance to another vessel was
 1.0 km - so a pair is MATCHED only when neither side has another candidate.

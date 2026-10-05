@@ -16,9 +16,9 @@ vessel's gate of the polyline:
 - a margin, over which the dark rate is reported as a curve.
 
 A detection with no candidate is dark (PLAN §17, 2026-10-04 "Phase 6
-feasibility"). On the busy Fujairah pass of 2026-09-25, GFW's own SAR position
-for 53 of the 58 vessels it matched lay within 0.8 km of the vessel's hourly
-polyline.
+feasibility"). On the busy Fujairah pass of 2026-09-25, GFW matched 65
+vessels with an id; 58 were in the presence window, and GFW's own SAR position
+for 53 of those 58 lay within 0.8 km of the vessel's hourly polyline.
 """
 
 from __future__ import annotations
@@ -58,8 +58,10 @@ def gate_m(track: HourlyTrack, *, r_over_v_s: float, margin_m: float) -> float:
 
     A sparse (single-fix) track has unknown speed and gets no allowance.
     """
-    if r_over_v_s < 0 or margin_m < 0:
-        raise ValueError(f"r_over_v_s {r_over_v_s} and margin_m {margin_m} must be non-negative")
+    if not all(math.isfinite(v) and v >= 0 for v in (r_over_v_s, margin_m)):
+        raise ValueError(
+            f"r_over_v_s {r_over_v_s} and margin_m {margin_m} must be finite and non-negative"
+        )
     lat = sum(f.lat for f in track.fixes) / len(track.fixes)
     return cell_half_diagonal_m(lat) + r_over_v_s * (track.speed_mps or 0.0) + margin_m
 
@@ -73,7 +75,7 @@ def candidates(
 ) -> list[list[Candidate]]:
     """For each (lon, lat) detection, the vessels whose gate it falls in, best (lowest score) first."""
     gated = [
-        (t.vessel_id, t.vertices, gate_m(t, r_over_v_s=r_over_v_s, margin_m=margin_m))
+        (t.vessel_id, t.gate_vertices, gate_m(t, r_over_v_s=r_over_v_s, margin_m=margin_m))
         for t in tracks
     ]
     found: list[list[Candidate]] = []

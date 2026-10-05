@@ -164,3 +164,45 @@ def test_candidates_are_ordered_by_distance_relative_to_their_gate():
 def test_results_are_aligned_with_the_detections_given():
     found = candidates([(56.50, 25.25), (56.50, 25.20)], [track()], r_over_v_s=110.0, margin_m=0.0)
     assert [len(f) for f in found] == [0, 1]
+
+
+# ---------------------------------------------------------------------------
+# Tracks that do not span the pass time
+# ---------------------------------------------------------------------------
+# A fix in hour H lies somewhere in [H, H+1); the pass is at H + f (f = 0.264
+# here). A vessel seen only at H-1 and H can be up to f of an hour of travel
+# beyond its H cell at the pass, and one seen only at H and H+1 up to (1 - f)
+# of an hour before it, so such tracks are extended along their direction.
+
+F = (15 * 60 + 51) / 3600  # PASS is 14:15:51
+
+
+def test_a_track_seen_at_h_minus_1_and_h_is_extended_forward_by_the_pass_fraction():
+    moving = track(cells=((13, 56.50, 25.00), (14, 56.50, 25.10)))
+    ahead = 25.10 + 0.8 * F * 0.10  # within the extension, 1.5 km beyond the H cell
+    assert candidates([(56.50, ahead)], [moving], r_over_v_s=0.0, margin_m=0.0) != [[]]
+    beyond = 25.10 + F * 0.10 + 0.02  # past the extension by 2.2 km
+    assert candidates([(56.50, beyond)], [moving], r_over_v_s=0.0, margin_m=0.0) == [[]]
+
+
+def test_a_track_seen_at_h_and_h_plus_1_is_extended_backward_by_the_rest_of_the_hour():
+    moving = track(cells=((14, 56.50, 25.10), (15, 56.50, 25.20)))
+    behind = 25.10 - 0.8 * (1 - F) * 0.10  # 6.5 km before the H cell
+    assert candidates([(56.50, behind)], [moving], r_over_v_s=0.0, margin_m=0.0) != [[]]
+
+
+def test_a_track_spanning_the_pass_is_not_extended():
+    full = track(cells=((13, 56.50, 25.00), (14, 56.50, 25.10), (15, 56.50, 25.20)))
+    assert full.gate_vertices == full.vertices
+
+
+def test_extending_a_vessel_that_stays_in_one_cell_changes_nothing():
+    still = track(cells=((13, 56.50, 25.10), (14, 56.50, 25.10)))
+    assert {tuple(v) for v in still.gate_vertices} == {(56.50, 25.10)}
+
+
+def test_gate_rejects_nan_or_infinite_parameters():
+    with pytest.raises(ValueError):
+        gate_m(track(), r_over_v_s=float("nan"), margin_m=0.0)
+    with pytest.raises(ValueError):
+        gate_m(track(), r_over_v_s=110.0, margin_m=float("inf"))
