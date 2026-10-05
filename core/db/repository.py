@@ -20,7 +20,7 @@ from sqlalchemy.orm import Session
 
 from core.ais.messages import AisPositionReport, VesselStatic, coarse_class
 from core.ais.plausibility import ScoredPosition
-from core.db.models import AisPosition, Detection, SarScene, Vessel
+from core.db.models import AisPosition, Detection, Event, SarScene, Vessel
 from core.db.spatial import BBox, bbox_filter_sql, bbox_params
 
 # Positions are written in batches; a per-message round trip cannot keep up
@@ -628,3 +628,93 @@ def _to_detection_view(row) -> DetectionView:
         satellite=row["satellite"],
         product_name=row["product_name"],
     )
+
+
+@dataclass(frozen=True)
+class NewEvent:
+    """An event to store; ``evidence`` must explain it (PLAN §9: no unexplainable alert)."""
+
+    event_type: str
+    ts: dt.datetime
+    lon: float | None
+    lat: float | None
+    severity: str
+    detection_id: int | None
+    evidence: dict
+
+
+@dataclass(frozen=True)
+class EventView:
+    """A stored event as the API serves it."""
+
+    id: int
+    event_type: str
+    ts: dt.datetime
+    lon: float | None
+    lat: float | None
+    severity: str
+    detection_id: int | None
+    scene_id: int | None
+    run: str | None
+    evidence: dict
+    acknowledged: bool
+
+
+class EventRepository:
+    """Analyst-facing events, each with its evidence card."""
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def replace_for_scene(self, scene_id: int, run: str, events: Sequence[NewEvent]) -> int:
+        """Store one fusion run's events for a pass, replacing that run's earlier events for it."""
+        for event in events:  # validate everything before deleting anything
+            if not event.evidence:
+                raise ValueError(f"{event.event_type} at {event.lon}, {event.lat} has no evidence")
+        self._session.query(Event).filter(Event.scene_id == scene_id, Event.run == run).delete(
+            synchronize_session=False
+        )
+        self._session.add_all(
+            Event(
+                event_type=e.event_type,
+                ts=_as_utc(e.ts),
+                lon=e.lon,
+                lat=e.lat,
+                severity=e.severity,
+                detection_id=e.detection_id,
+                evidence=e.evidence,
+                scene_id=scene_id,
+                run=run,
+            )
+            for e in events
+        )
+        self._session.flush()
+        return len(events)
+
+    def in_bbox(
+        self, bbox: BBox, *, event_type: str | None = None, limit: int = 5_000
+    ) -> list[EventView]:
+        """Events inside a bounding box, newest first."""
+        query = select(Event).where(
+            Event.lon.between(bbox.min_lon, bbox.max_lon),
+            Event.lat.between(bbox.min_lat, bbox.max_lat),
+        )
+        if event_type is not None:
+            query = query.where(Event.event_type == event_type)
+        query = query.order_by(Event.ts.desc(), Event.id).limit(limit)
+        return [
+            EventView(
+                id=e.id,
+                event_type=e.event_type,
+                ts=_as_utc(e.ts),
+                lon=e.lon,
+                lat=e.lat,
+                severity=e.severity,
+                detection_id=e.detection_id,
+                scene_id=e.scene_id,
+                run=e.run,
+                evidence=e.evidence,
+                acknowledged=e.acknowledged,
+            )
+            for e in self._session.execute(query).scalars()
+        ]

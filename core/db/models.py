@@ -214,6 +214,10 @@ class Event(Base):
     # Never surface an alert whose evidence cannot be shown to the analyst.
     evidence: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     acknowledged: Mapped[bool] = mapped_column(Boolean, default=False, index=True)
+    # The pass and the fusion run that made the event, so a re-run replaces its
+    # own events (nullable: added after the table existed).
+    scene_id: Mapped[int | None] = mapped_column(ForeignKey("sar_scenes.id"))
+    run: Mapped[str | None] = mapped_column(String(32))
 
 
 class Zone(Base):

@@ -27,6 +27,8 @@ from core.config import load_settings
 from core.db.repository import (
     DetectionRepository,
     DetectionView,
+    EventRepository,
+    EventView,
     PositionRepository,
     SceneRepository,
     VesselFix,
@@ -281,6 +283,48 @@ async def detections(
         "count": len(found),
         "detections": [_detection_to_json(d, now) for d in found],
         "attribution": "Contains modified Copernicus Sentinel data",
+    }
+
+
+@app.get("/api/events")
+async def events(
+    bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
+    type: str | None = Query(default=None, description="e.g. DARK_VESSEL"),
+    limit: int = Query(default=5_000, ge=1, le=50_000),
+) -> dict[str, Any]:
+    """Analyst events (dark vessels first among them), newest first, each with its evidence card.
+
+    Every event carries the age of the pass it came from: fusion runs in
+    batch at least 4-5 days after a pass, so no event is live.
+    """
+    box = _parse_bbox(bbox)
+    now = dt.datetime.now(dt.UTC)
+    with session_scope(_sessions()) as session:
+        found = EventRepository(session).in_bbox(box, event_type=type, limit=limit)
+    return {
+        "generated_at": now.isoformat(),
+        "bbox": _bbox_json(box),
+        "count": len(found),
+        "events": [_event_to_json(e, now) for e in found],
+        "attribution": "Powered by Global Fishing Watch (CC BY-NC 4.0); "
+        "contains modified Copernicus Sentinel data",
+    }
+
+
+def _event_to_json(event: EventView, now: dt.datetime) -> dict[str, Any]:
+    return {
+        "id": event.id,
+        "event_type": event.event_type,
+        "ts": event.ts.isoformat(),
+        "age_hours": round((now - event.ts).total_seconds() / 3600, 2),
+        "lon": event.lon,
+        "lat": event.lat,
+        "severity": event.severity,
+        "detection_id": event.detection_id,
+        "scene_id": event.scene_id,
+        "run": event.run,
+        "acknowledged": event.acknowledged,
+        "evidence": event.evidence,
     }
 
 
