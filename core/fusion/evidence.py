@@ -59,6 +59,11 @@ def dark_up_to_m(
     return dark[-1] if dark else None
 
 
+def _finite(metres: float) -> float | None:
+    """A distance for the card; None when infinite (no AIS vessel, no land loaded), as JSON has no infinity."""
+    return round(metres, 1) if math.isfinite(metres) else None
+
+
 def confidence_tier(dark_up_to: float) -> str:
     if dark_up_to >= TIER_HIGH_M:
         return "high"
@@ -87,6 +92,9 @@ def nearest_tracks(
                 "cells": [
                     {"hour": f.hour.isoformat(), "lon": f.lon, "lat": f.lat} for f in t.fixes
                 ],
+                # The polyline the distance and the gate were measured to (cells,
+                # extended to the pass time for a vessel seen in two hours).
+                "track": [[lon, lat] for lon, lat in t.gate_vertices],
             }
         )
     return listed
@@ -104,6 +112,7 @@ def evidence_card(
     r_over_v_s: float,
     gfw_matched: bool | None,
     pass_flags: dict,
+    gfw_cell_state: str | None = None,
     datasets: Sequence[str],
 ) -> dict:
     """The card of a detection that is dark at the operating ``margin_m``."""
@@ -121,14 +130,19 @@ def evidence_card(
         "scene": scene,
         "acquired": acquired.isoformat(),
         "detection": {"lon": detection.lon, "lat": detection.lat, "score": detection.score},
-        "gate": {"margin_m": margin_m, "r_over_v_s": r_over_v_s, "nearest_gap_m": round(gap, 1)},
+        "detector": {"name": detection.detector, "version": detection.detector_version},
+        "gate": {"margin_m": margin_m, "r_over_v_s": r_over_v_s, "nearest_gap_m": _finite(gap)},
         "dark_up_to_m": up_to,
         "confidence": confidence_tier(up_to),
         "gfw": {
             "cell_matched": gfw_matched,
             "corroborates": None if gfw_matched is None else not gfw_matched,
+            "cell_state": gfw_cell_state,
         },
-        "prefilter": {"shore_m": prefiltered.shore_m, "edge_m": prefiltered.edge_m},
+        "prefilter": {
+            "shore_m": _finite(prefiltered.shore_m),
+            "edge_m": _finite(prefiltered.edge_m),
+        },
         "nearest_ais": nearest_tracks(detection.lon, detection.lat, tracks),
         "pass_flags": dict(pass_flags),
         "datasets": list(datasets),

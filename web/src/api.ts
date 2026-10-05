@@ -142,6 +142,86 @@ export interface Track {
   points: TrackPoint[];
 }
 
+export type ConfidenceTier = "high" | "medium" | "low";
+
+/** An AIS vessel near a dark-vessel candidate: its hourly cells around the pass. */
+export interface NearestAis {
+  vessel_id: string;
+  mmsi: number | null;
+  imo: string | null;
+  ship_name: string | null;
+  flag: string | null;
+  vessel_type: string | null;
+  /** Distance from the detection to the vessel's hourly track, in metres. */
+  distance_m: number;
+  stationary: boolean;
+  /** Seen in only one of the three hours: speed unknown. */
+  sparse: boolean;
+  cells: { hour: string; lon: number; lat: number }[];
+  /** The polyline the distance was measured to: the cells, extended to the pass time. */
+  track: [number, number][];
+}
+
+/** GFW's own radar verdict for the candidate's 0.01 degree cell. */
+export type GfwCellState = "matched" | "unmatched" | "mixed" | "none" | "no_gfw_data" | "untrusted";
+
+/** Why a detection was called dark (core/fusion/evidence.py). */
+export interface DarkEvidence {
+  status: "dark";
+  scene: string;
+  acquired: string;
+  detection: { lon: number; lat: number; score: number };
+  /** CFAR's score is a fixed 1.0 ("passed its test"), not a probability. */
+  detector: { name: string | null; version: string | null };
+  gate: { margin_m: number; r_over_v_s: number; nearest_gap_m: number | null };
+  /** The largest swept gate margin at which the detection is still dark. */
+  dark_up_to_m: number;
+  confidence: ConfidenceTier;
+  /** GFW's own SAR detections in the cell; cell_state says which case a null flag stands for. */
+  gfw: {
+    cell_matched: boolean | null;
+    corroborates: boolean | null;
+    cell_state: GfwCellState | null;
+  };
+  /** Null when unknown (no land within reach of the box). */
+  prefilter: { shore_m: number | null; edge_m: number | null };
+  nearest_ais: NearestAis[];
+  pass_flags: {
+    gfw_artefact?: boolean;
+    presence_gap?: boolean;
+    no_presence?: boolean;
+    /** False: too few GFW detections to check this pass's AIS feed for a gap. */
+    presence_checked?: boolean;
+    gfw_refs?: number;
+  };
+  datasets: string[];
+  chip: { scene: string; lon: number; lat: number };
+  attribution: string;
+}
+
+export interface AnalystEvent {
+  id: number;
+  event_type: string;
+  ts: string;
+  /** Hours since the radar pass. Fusion runs days after a pass: never live. */
+  age_hours: number;
+  lon: number | null;
+  lat: number | null;
+  severity: string;
+  detection_id: number | null;
+  scene_id: number | null;
+  run: string | null;
+  acknowledged: boolean;
+  evidence: DarkEvidence;
+}
+
+export interface EventsResponse {
+  generated_at: string;
+  count: number;
+  events: AnalystEvent[];
+  attribution: string;
+}
+
 async function getJson<T>(url: string): Promise<T> {
   const response = await fetch(url);
   if (!response.ok) {
@@ -171,7 +251,31 @@ export const api = {
   scenes: (days = 14) => getJson<ScenesResponse>(`/api/scenes?days=${days}`),
   detections: (days = 14) =>
     getJson<DetectionsResponse>(`/api/detections?days=${days}`),
+  darkVessels: () => getJson<EventsResponse>("/api/events?type=DARK_VESSEL"),
 };
+
+/**
+ * Dark-vessel candidates outrank everything on the map. The tier says how far
+ * from any AIS track the detection lies: high stays dark even with a 2 km gate
+ * margin, low only just misses an AIS vessel's gate.
+ */
+// A red-orange family, kept well clear of the radar rings' yellow.
+export const DARK_COLOURS: Record<ConfidenceTier, string> = {
+  high: "#ff3b30",
+  medium: "#ff6a00",
+  low: "#ff8f40",
+};
+
+export const DARK_TIER_LABELS: Record<ConfidenceTier, string> = {
+  high: "High: dark even with a 2 km margin",
+  medium: "Medium: dark with a 0.5 km margin, not with 2 km",
+  low: "Low: within 0.5 km of an AIS vessel's gate",
+};
+
+export function tierOf(event: AnalystEvent): ConfidenceTier {
+  const tier = event.evidence.confidence;
+  return tier === "high" || tier === "medium" ? tier : "low";
+}
 
 /** Radar detections share one colour: what matters is that radar saw them. */
 export const RADAR_COLOUR = "#ffd84a";

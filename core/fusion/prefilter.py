@@ -43,11 +43,17 @@ DUPLICATE_RADIUS_M = 100.0
 
 @dataclass(frozen=True)
 class SarDetection:
-    """One of our detections: position and score (model probability; CFAR detections use 1.0)."""
+    """One of our detections: position and score (model probability; CFAR detections use 1.0).
+
+    The detector is kept for the evidence card, where a CFAR 1.0 ("passed its
+    fixed test") must not read as a model's certainty.
+    """
 
     lon: float
     lat: float
     score: float
+    detector: str | None = None
+    detector_version: str | None = None
 
 
 @dataclass(frozen=True)

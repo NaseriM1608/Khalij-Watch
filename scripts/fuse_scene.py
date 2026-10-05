@@ -162,7 +162,16 @@ def main(argv: Sequence[str] | None = None) -> int:
         scene=stored.product_name,
         acquired=stored.acquired,
         detections=[
-            (v.id, SarDetection(lon=v.lon, lat=v.lat, score=v.confidence))
+            (
+                v.id,
+                SarDetection(
+                    lon=v.lon,
+                    lat=v.lat,
+                    score=v.confidence,
+                    detector=v.detector,
+                    detector_version=v.detector_version,
+                ),
+            )
             for v in stored.detections
         ],
         fixes=fixes,

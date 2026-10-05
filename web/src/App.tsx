@@ -11,11 +11,16 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { VesselMap } from "./VesselMap";
 import {
   ANOMALY_LABELS,
+  AnalystEvent,
   BBox,
   CLASS_COLOURS,
   CLASS_LABELS,
   CoarseClass,
+  ConfidenceTier,
+  DARK_COLOURS,
+  DARK_TIER_LABELS,
   DetectionsResponse,
+  EventsResponse,
   Health,
   RADAR_COLOUR,
   SarDetection,
@@ -26,6 +31,7 @@ import {
   classOf,
   coverageColour,
   formatAge,
+  tierOf,
 } from "./api";
 
 const REFRESH_MS = 5000;
@@ -34,6 +40,8 @@ const RADAR_REFRESH_MS = 60_000;
 const RADAR_LOOKBACK_DAYS = 14;
 // A stable empty list, so hiding the layer does not re-render the map each tick.
 const NO_DETECTIONS: SarDetection[] = [];
+const NO_EVENTS: AnalystEvent[] = [];
+const TIERS: ConfidenceTier[] = ["high", "medium", "low"];
 const ALL_CLASSES: (CoarseClass | "unknown")[] = [
   "cargo_tanker",
   "fishing",
@@ -59,6 +67,10 @@ export default function App() {
   const [radar, setRadar] = useState<DetectionsResponse | null>(null);
   const [radarError, setRadarError] = useState<string | null>(null);
   const [showRadar, setShowRadar] = useState(true);
+  const [dark, setDark] = useState<EventsResponse | null>(null);
+  const [darkError, setDarkError] = useState<string | null>(null);
+  const [showDark, setShowDark] = useState(true);
+  const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
@@ -79,6 +91,27 @@ export default function App() {
         setRadarError(null);
       } catch (err) {
         if (!cancelled) setRadarError((err as Error).message);
+      }
+    };
+    load();
+    const timer = setInterval(load, RADAR_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  // Fusion runs in batch days after a pass, so events change rarely.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await api.darkVessels();
+        if (cancelled) return;
+        setDark(response);
+        setDarkError(null);
+      } catch (err) {
+        if (!cancelled) setDarkError((err as Error).message);
       }
     };
     load();
@@ -145,7 +178,26 @@ export default function App() {
     });
   }, []);
 
+  const darkCounts = useMemo(() => {
+    const tally = new Map<ConfidenceTier, number>();
+    for (const event of dark?.events ?? []) {
+      tally.set(tierOf(event), (tally.get(tierOf(event)) ?? 0) + 1);
+    }
+    return tally;
+  }, [dark]);
+
+  const selectVessel = useCallback((mmsi: number | null) => {
+    setSelected(mmsi);
+    if (mmsi != null) setSelectedEventId(null);
+  }, []);
+  const selectEvent = useCallback((id: number | null) => {
+    setSelectedEventId(id);
+    if (id != null) setSelected(null);
+  }, []);
+
   const selectedVessel = vessels.find((v) => v.mmsi === selected) ?? null;
+  const selectedEvent =
+    (showDark && dark?.events.find((e) => e.id === selectedEventId)) || null;
   const isSynthetic = attribution.length > 0 && attribution.every((s) => s === "synthetic");
 
   return (
@@ -238,8 +290,9 @@ export default function App() {
           <h2>Radar detections</h2>
           <p className="hint">
             Rings are objects the radar saw, whether or not they broadcast
-            anything. Each is a snapshot from one pass, not a live position,
-            and none has been matched against AIS yet.
+            anything. Each is a snapshot from one pass, not a live position.
+            A ring alone says nothing about AIS; passes fused with AIS mark
+            their dark-vessel candidates separately (below).
           </p>
           <label className="legend">
             <span className="suspect-row">
@@ -256,6 +309,43 @@ export default function App() {
             </span>
           </label>
           {radarError && <p className="error">{radarError}</p>}
+        </section>
+
+        <section className="panel">
+          <h2>Dark-vessel candidates</h2>
+          <p className="hint">
+            Radar detections that no AIS vessel&rsquo;s hourly track reaches,
+            from Global Fishing Watch AIS presence. Fused in batch days after a
+            pass. A candidate, not a verdict: reception gaps, jamming and the
+            hourly sampling can make an AIS ship look dark. Only passes already
+            fused carry candidates; elsewhere no red ring means not checked,
+            not clear.
+          </p>
+          <label className="legend">
+            <span className="suspect-row">
+              <input
+                type="checkbox"
+                checked={showDark}
+                onChange={() => {
+                  setShowDark((v) => !v);
+                  setSelectedEventId(null);
+                }}
+              />
+              <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS.medium }} />
+              <span className="legend-label">Show candidates</span>
+              <span className="legend-count">{dark?.count ?? 0}</span>
+            </span>
+          </label>
+          <ul className="legend tier-key">
+            {TIERS.map((tier) => (
+              <li key={tier}>
+                <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS[tier] }} />
+                <span className="legend-label">{DARK_TIER_LABELS[tier]}</span>
+                <span className="legend-count">{darkCounts.get(tier) ?? 0}</span>
+              </li>
+            ))}
+          </ul>
+          {darkError && <p className="error">{darkError}</p>}
         </section>
 
         <section className="panel">
@@ -344,6 +434,12 @@ export default function App() {
           Source: {attribution.length ? attribution.join(", ") : "—"}
           <br />
           Contains modified Copernicus Sentinel data.
+          {showDark && (dark?.count ?? 0) > 0 && (
+            <>
+              <br />
+              Dark-vessel AIS: Powered by Global Fishing Watch (CC BY-NC 4.0).
+            </>
+          )}
         </footer>
       </aside>
 
@@ -357,17 +453,25 @@ export default function App() {
           track={track?.points ?? null}
           selected={selected}
           aoi={aoi}
-          onSelect={setSelected}
+          onSelect={selectVessel}
+          darkEvents={showDark ? (dark?.events ?? NO_EVENTS) : NO_EVENTS}
+          selectedEvent={selectedEvent}
+          onSelectEvent={selectEvent}
         />
       </main>
 
-      <aside className={`context ${selectedVessel ? "open" : ""}`}>
-        {selectedVessel ? (
+      <aside className={`context ${selectedVessel || selectedEvent ? "open" : ""}`}>
+        {selectedEvent ? (
+          <DarkVesselDetail event={selectedEvent} onClose={() => setSelectedEventId(null)} />
+        ) : selectedVessel ? (
           <VesselDetail vessel={selectedVessel} track={track} onClose={() => setSelected(null)} />
         ) : (
           <div className="empty">
             <h2>No contact selected</h2>
-            <p>Click a vessel on the map to see its identity and recent track.</p>
+            <p>
+              Click a vessel to see its identity and recent track, or a red or
+              orange ring to see why a radar detection was called dark.
+            </p>
           </div>
         )}
       </aside>
@@ -460,6 +564,140 @@ function VesselDetail({
         Identity is self-reported over AIS and may be falsified. In this region
         a large share of transits broadcast fabricated positions.
       </p>
+    </div>
+  );
+}
+
+/** What GFW's own radar matching says about the candidate's cell. */
+function gfwLine(evidence: AnalystEvent["evidence"]): string {
+  switch (evidence.gfw.cell_state) {
+    case "untrusted":
+      return "Not usable on this pass: GFW's matching failed for the whole pass.";
+    case "unmatched":
+      return "GFW also saw a vessel here without AIS (corroborates).";
+    case "matched":
+      return "GFW matched a vessel here to AIS (contradicts).";
+    case "mixed":
+      return "GFW saw vessels here with and without AIS: no single verdict.";
+    case "none":
+      return "GFW has no detection in this cell.";
+    case "no_gfw_data":
+      return "GFW published no radar detections for this pass.";
+    default:
+      return "Not recorded.";
+  }
+}
+
+/** CFAR's 1.0 means it passed a fixed test, not that it is certain. */
+function detectorLine(evidence: AnalystEvent["evidence"]): string {
+  const { name, version } = evidence.detector ?? { name: null, version: null };
+  if (name === "cfar") return "CFAR (passed its fixed false-alarm test; no probability)";
+  if (name === "pointdet") {
+    return `model ${version ?? ""}, score ${evidence.detection.score.toFixed(2)}`.trim();
+  }
+  return name ? `${name} ${version ?? ""}`.trim() : "not recorded";
+}
+
+function formatMetres(metres: number | null): string {
+  if (metres == null) return "unknown";
+  return metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.round(metres)} m`;
+}
+
+function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: () => void }) {
+  const evidence = event.evidence;
+  const tier = tierOf(event);
+  return (
+    <div className="detail">
+      <button className="close" onClick={onClose} aria-label="Close">
+        ×
+      </button>
+      <h2>Dark-vessel candidate</h2>
+      <p className="subtitle">
+        <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS[tier] }} />
+        {DARK_TIER_LABELS[tier]}
+      </p>
+
+      <div className="age-badge">Radar pass {formatAge(event.age_hours * 3600)}</div>
+
+      <div className="why-dark">
+        <h3>Why dark</h3>
+        <p>
+          No AIS vessel&rsquo;s hourly track passes within its gate.{" "}
+          {evidence.gate.nearest_gap_m == null
+            ? "No AIS vessel at all was near this pass."
+            : `It lies ${formatMetres(evidence.gate.nearest_gap_m)} outside the nearest AIS vessel's gate (still dark at the ${formatMetres(evidence.dark_up_to_m)} step of the margin sweep).`}
+        </p>
+        {evidence.pass_flags.presence_checked === false && (
+          <p className="caveat">
+            This pass had too few GFW detections to check its AIS feed for gaps:
+            a gap in the feed would look like dark vessels.
+          </p>
+        )}
+      </div>
+
+      <dl className="stats stacked">
+        <div>
+          <dt>Position</dt>
+          <dd>
+            {evidence.detection.lat.toFixed(4)}°, {evidence.detection.lon.toFixed(4)}°
+          </dd>
+        </div>
+        <div>
+          <dt>Detector</dt>
+          <dd>{detectorLine(evidence)}</dd>
+        </div>
+        <div>
+          <dt>GFW radar</dt>
+          <dd>{gfwLine(evidence)}</dd>
+        </div>
+        <div>
+          <dt>Distance to shore / box edge</dt>
+          <dd>
+            {formatMetres(evidence.prefilter.shore_m)} / {formatMetres(evidence.prefilter.edge_m)}
+          </dd>
+        </div>
+        <div>
+          <dt>Gate</dt>
+          <dd>
+            cell + R/V {evidence.gate.r_over_v_s} s × speed + margin{" "}
+            {formatMetres(evidence.gate.margin_m)}
+          </dd>
+        </div>
+        <div>
+          <dt>Pass</dt>
+          <dd className="scene-name">{evidence.scene.replace(/_COG\.SAFE$/, "")}</dd>
+        </div>
+      </dl>
+
+      <div className="nearest-ais">
+        <h3>Nearest AIS vessels (white on the map)</h3>
+        <ul>
+          {evidence.nearest_ais.map((vessel) => (
+            <li key={vessel.vessel_id}>
+              <strong>{vessel.ship_name ?? (vessel.mmsi ? `MMSI ${vessel.mmsi}` : "unnamed")}</strong>
+              <span>
+                {formatMetres(vessel.distance_m)} away
+                {vessel.flag ? ` · ${vessel.flag}` : ""}
+                {vessel.stationary ? " · anchored" : vessel.sparse ? " · seen 1 hour" : ""}
+              </span>
+              <span className="cells">
+                {vessel.cells
+                  .map((cell) => new Date(cell.hour).toISOString().slice(11, 16))
+                  .join(", ")}{" "}
+                UTC
+              </span>
+            </li>
+          ))}
+        </ul>
+      </div>
+
+      <p className="hint">
+        A candidate, not a verdict. AIS here comes as one position per vessel
+        per hour in about 1 km cells, so a ship can look dark when its hourly
+        cell is far from where the radar caught it, and GNSS jamming moves AIS
+        positions. Data: {evidence.datasets.join(", ") || "unknown"}.
+      </p>
+      <p className="hint">{evidence.attribution}</p>
     </div>
   );
 }

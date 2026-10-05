@@ -19,7 +19,14 @@ from core.db.spatial import BBox
 from core.fusion.assign import DARK, assign
 from core.fusion.evidence import evidence_card
 from core.fusion.gate import candidates
-from core.fusion.guards import expected_ais, gfw_flag_for, is_gfw_artefact, is_presence_gap
+from core.fusion.guards import (
+    expected_ais,
+    gap_is_judgeable,
+    gfw_cell_state,
+    gfw_flag_for,
+    is_gfw_artefact,
+    is_presence_gap,
+)
 from core.fusion.prefilter import SarDetection, prefilter
 from core.fusion.presence import PresenceFix, hourly_tracks
 from core.labeling.gfw import _floor_hour
@@ -61,6 +68,9 @@ def dark_vessel_events(
         "presence_gap": is_presence_gap(box_vessels=box_vessels, gfw_matched=expected),
         # Presence arrives about 96 h after a pass: an empty feed is missing data, not a dark sea.
         "no_presence": not fixes,
+        # Whether the pass had enough GFW detections to check presence for a gap at all.
+        "presence_checked": gap_is_judgeable(expected),
+        "gfw_refs": gfw_refs,
     }
     outcome = prefilter(
         [d for _, d in detections],
@@ -106,6 +116,9 @@ def dark_vessel_events(
             gfw_matched=None if artefact else gfw_flag_for(detection.lon, detection.lat, refs),
             pass_flags=flags,
             datasets=datasets,
+            gfw_cell_state="untrusted"
+            if artefact
+            else gfw_cell_state(detection.lon, detection.lat, refs),
         )
         events.append(
             NewEvent(

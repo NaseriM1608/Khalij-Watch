@@ -93,6 +93,8 @@ def test_the_pass_summary_reports_the_flags_shown_on_every_card():
         "gfw_artefact": False,
         "presence_gap": False,
         "no_presence": False,
+        "presence_checked": False,
+        "gfw_refs": 0,
     }
 
 
@@ -110,4 +112,25 @@ def test_on_a_gfw_artefact_pass_gfws_unmatched_flag_corroborates_nothing():
     refs = [(56.44 + 0.01 * i, 25.16, 1, False) for i in range(11)] + [(56.58, 25.27, 1, False)]
     events, summary = run([(12, SarDetection(56.58, 25.27, 0.9))], fixes, refs=refs)
     assert summary["gfw_artefact"] is True
-    assert events[0].evidence["gfw"] == {"cell_matched": None, "corroborates": None}
+    assert events[0].evidence["gfw"] == {
+        "cell_matched": None,
+        "corroborates": None,
+        "cell_state": "untrusted",
+    }
+
+
+def test_cards_state_gfws_cell_verdict_and_whether_presence_could_be_checked():
+    refs = [(56.58, 25.27, 1, True), (56.58, 25.27, 1, False)]  # mixed cell
+    events, summary = run(
+        [(12, SarDetection(56.58, 25.27, 0.9))], anchored("a", 56.50, 25.20), refs=refs
+    )
+    card = events[0].evidence
+    assert card["gfw"]["cell_state"] == "mixed"
+    assert card["pass_flags"]["gfw_refs"] == 2
+    assert card["pass_flags"]["presence_checked"] is False  # 1 GFW match: too few to judge
+    assert summary["presence_checked"] is False
+
+
+def test_a_pass_where_gfw_published_nothing_says_so_on_the_card():
+    events, _ = run([(12, SarDetection(56.58, 25.27, 0.9))], anchored("a", 56.50, 25.20), refs=[])
+    assert events[0].evidence["gfw"]["cell_state"] == "no_gfw_data"

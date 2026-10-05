@@ -115,6 +115,7 @@ def test_a_card_explains_a_dark_call():
         margins=MARGINS,
         r_over_v_s=118.0,
         gfw_matched=False,
+        gfw_cell_state="unmatched",
         pass_flags={"gfw_artefact": False, "presence_gap": False},
         datasets=["public-global-presence:v4.0"],
     )
@@ -123,7 +124,7 @@ def test_a_card_explains_a_dark_call():
     assert card["detection"] == {"lon": detection.lon, "lat": detection.lat, "score": 0.93}
     assert card["gate"]["margin_m"] == 500.0 and card["gate"]["r_over_v_s"] == 118.0
     assert card["dark_up_to_m"] == 2000.0 and card["confidence"] == "high"
-    assert card["gfw"] == {"cell_matched": False, "corroborates": True}
+    assert card["gfw"] == {"cell_matched": False, "corroborates": True, "cell_state": "unmatched"}
     assert card["prefilter"] == {"shore_m": 4200.0, "edge_m": 3100.0}
     assert card["nearest_ais"][0]["vessel_id"] == "a"
     assert card["datasets"] == ["public-global-presence:v4.0"]
@@ -148,3 +149,49 @@ def test_a_card_refuses_a_detection_that_is_not_dark_at_the_operating_margin():
             pass_flags={},
             datasets=[],
         )
+
+
+def test_a_card_never_holds_infinite_distances_so_it_stays_valid_json():
+    # No AIS vessel at all and no land loaded: both distances are infinite in
+    # the computation; the API serialises with allow_nan=False.
+    import json
+
+    card = evidence_card(
+        scene="S",
+        acquired=PASS,
+        detection=SarDetection(lon=56.50, lat=25.20, score=0.9),
+        prefiltered=Prefiltered(reason=None, merged_into=None, shore_m=float("inf"), edge_m=3000.0),
+        tracks=[],
+        margin_m=0.0,
+        margins=MARGINS,
+        r_over_v_s=118.0,
+        gfw_matched=None,
+        pass_flags={},
+        datasets=[],
+    )
+    assert card["gate"]["nearest_gap_m"] is None
+    assert card["prefilter"]["shore_m"] is None
+    json.dumps(card, allow_nan=False)
+
+
+def test_a_card_names_the_detector_and_draws_each_nearest_vessels_gate_track():
+    tracks = [anchored("a", 56.50, 25.20)]
+    card = evidence_card(
+        scene="S",
+        acquired=PASS,
+        detection=SarDetection(
+            lon=56.50, lat=25.25, score=1.0, detector="cfar", detector_version="L4.4"
+        ),
+        prefiltered=Prefiltered(reason=None, merged_into=None, shore_m=5000.0, edge_m=5000.0),
+        tracks=tracks,
+        margin_m=0.0,
+        margins=MARGINS,
+        r_over_v_s=118.0,
+        gfw_matched=None,
+        gfw_cell_state="mixed",
+        pass_flags={},
+        datasets=[],
+    )
+    assert card["detector"] == {"name": "cfar", "version": "L4.4"}
+    assert card["gfw"]["cell_state"] == "mixed"
+    assert card["nearest_ais"][0]["track"] == [[56.50, 25.20]] * 3

@@ -35,6 +35,19 @@ def gfw_flag_for(lon: float, lat: float, refs: Sequence[Sequence]) -> bool | Non
     return flags.pop() if len(flags) == 1 else None
 
 
+def gfw_cell_state(lon: float, lat: float, refs: Sequence[Sequence]) -> str:
+    """GFW's verdict for this position's cell: matched, unmatched, mixed, none, or no_gfw_data for the pass."""
+    if not refs:
+        return "no_gfw_data"
+    key = _cell_key(lon, lat)
+    flags = {bool(r[3]) for r in refs if _cell_key(r[0], r[1]) == key}
+    if not flags:
+        return "none"
+    if len(flags) == 2:
+        return "mixed"
+    return "matched" if flags.pop() else "unmatched"
+
+
 def is_gfw_artefact(refs: Sequence[Sequence], *, box_vessels: int) -> bool:
     """GFW matched none of many detections although many AIS vessels were in the box."""
     total = sum(int(r[2]) for r in refs)

@@ -11,14 +11,20 @@
  * Radar detections are hollow rings. A filled symbol means someone told us a
  * vessel is there; a ring means the radar saw something there. That
  * distinction is the point of the product, so the two never share a style.
+ *
+ * Dark-vessel candidates - radar detections that no AIS vessel's hourly track
+ * reaches - are the visual priority: thicker rings, red to amber by
+ * confidence, drawn above everything and never clustered away.
  */
 
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
+  AnalystEvent,
   BBox,
   CLASS_COLOURS,
+  DARK_COLOURS,
   RADAR_COLOUR,
   SarDetection,
   SarScene,
@@ -26,6 +32,7 @@ import {
   classOf,
   coverageColour,
   formatAge,
+  tierOf,
 } from "./api";
 
 // CARTO's dark basemap needs no API key and suits an operational console.
@@ -36,8 +43,11 @@ const VESSEL_SOURCE = "vessels";
 const TRACK_SOURCE = "track";
 const SCENE_SOURCE = "scenes";
 const DETECTION_SOURCE = "detections";
+const DARK_SOURCE = "dark-events";
+const EVENT_AIS_SOURCE = "event-ais";
 const VESSEL_LAYERS = ["vessel-arrows", "vessel-dots"];
 const DETECTION_LAYER = "detection-rings";
+const DARK_LAYER = "dark-rings";
 
 interface Props {
   vessels: Vessel[];
@@ -47,6 +57,9 @@ interface Props {
   selected: number | null;
   aoi: BBox | null;
   onSelect: (mmsi: number | null) => void;
+  darkEvents: AnalystEvent[];
+  selectedEvent: AnalystEvent | null;
+  onSelectEvent: (id: number | null) => void;
 }
 
 function toFeatureCollection(vessels: Vessel[]): GeoJSON.FeatureCollection {
@@ -99,6 +112,48 @@ function toDetectionFeatures(
   };
 }
 
+function toDarkFeatures(events: AnalystEvent[]): GeoJSON.FeatureCollection {
+  return {
+    type: "FeatureCollection",
+    features: events
+      .filter((event) => event.lon != null && event.lat != null)
+      .map((event) => ({
+        type: "Feature",
+        geometry: { type: "Point", coordinates: [event.lon as number, event.lat as number] },
+        properties: {
+          id: event.id,
+          colour: DARK_COLOURS[tierOf(event)],
+          ageHours: event.age_hours,
+        },
+      })),
+  };
+}
+
+/** The selected candidate's nearest AIS vessels: their hourly tracks and cells. */
+function toNearestAisFeatures(event: AnalystEvent | null): GeoJSON.FeatureCollection {
+  if (!event) return { type: "FeatureCollection", features: [] };
+  const features: GeoJSON.Feature[] = [];
+  for (const vessel of event.evidence.nearest_ais) {
+    // The polyline the gate measured to, not just the hourly cells.
+    const coordinates = vessel.track ?? vessel.cells.map((c) => [c.lon, c.lat]);
+    if (new Set(coordinates.map((c) => c.join(","))).size > 1) {
+      features.push({
+        type: "Feature",
+        properties: { kind: "track" },
+        geometry: { type: "LineString", coordinates },
+      });
+    }
+    for (const cell of vessel.cells) {
+      features.push({
+        type: "Feature",
+        properties: { kind: "cell" },
+        geometry: { type: "Point", coordinates: [cell.lon, cell.lat] },
+      });
+    }
+  }
+  return { type: "FeatureCollection", features };
+}
+
 /** Radar cannot tell bow from stern, so both directions are stated. */
 function headingLabel(headingDeg: number | null): string {
   if (headingDeg == null) return "not measured";
@@ -134,6 +189,9 @@ export function VesselMap({
   selected,
   aoi,
   onSelect,
+  darkEvents,
+  selectedEvent,
+  onSelectEvent,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -164,6 +222,8 @@ export function VesselMap({
         TRACK_SOURCE,
         SCENE_SOURCE,
         DETECTION_SOURCE,
+        DARK_SOURCE,
+        EVENT_AIS_SOURCE,
         "aoi",
       ]) {
         instance.addSource(id, {
@@ -299,11 +359,73 @@ export function VesselMap({
         },
       });
 
+      // The selected candidate's nearest AIS vessels: their hourly cells and
+      // the track between them, which the gate measured the detection against.
+      instance.addLayer({
+        id: "event-ais-tracks",
+        type: "line",
+        source: EVENT_AIS_SOURCE,
+        filter: ["==", ["get", "kind"], "track"],
+        paint: {
+          "line-color": "#ffffff",
+          "line-width": 1.4,
+          "line-opacity": 0.8,
+          "line-dasharray": [2, 2],
+        },
+      });
+      instance.addLayer({
+        id: "event-ais-cells",
+        type: "circle",
+        source: EVENT_AIS_SOURCE,
+        filter: ["==", ["get", "kind"], "cell"],
+        paint: {
+          "circle-radius": 3,
+          "circle-color": "#ffffff",
+          "circle-opacity": 0.85,
+        },
+      });
+
+      // Dark-vessel candidates last, so they sit on top of everything.
+      instance.addLayer({
+        id: DARK_LAYER,
+        type: "circle",
+        source: DARK_SOURCE,
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 5, 12, 14],
+          "circle-color": "transparent",
+          "circle-stroke-width": ["interpolate", ["linear"], ["zoom"], 5, 1.8, 12, 3],
+          "circle-stroke-color": ["get", "colour"],
+          "circle-stroke-opacity": darkAgeOpacity(),
+        },
+      });
+      instance.addLayer({
+        id: "dark-selected",
+        type: "circle",
+        source: DARK_SOURCE,
+        filter: ["==", ["get", "id"], -1],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 9, 12, 20],
+          "circle-color": "transparent",
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#ffffff",
+        },
+      });
+
       addArrowIcons(instance);
       setLoaded(true);
 
-      // A reported vessel takes precedence; otherwise explain the radar ring.
+      // A dark-vessel candidate first, then a reported vessel; otherwise
+      // explain the radar ring.
       const pick = (event: maplibregl.MapMouseEvent) => {
+        const dark = instance.queryRenderedFeatures(event.point, {
+          layers: [DARK_LAYER],
+        });
+        if (dark.length) {
+          onSelect(null);
+          onSelectEvent(dark[0].properties?.id as number);
+          return;
+        }
+        onSelectEvent(null);
         const hits = instance.queryRenderedFeatures(event.point, {
           layers: VESSEL_LAYERS,
         });
@@ -318,7 +440,7 @@ export function VesselMap({
         if (seen.length) showDetectionPopup(instance, seen[0]);
       };
       instance.on("click", pick);
-      for (const layer of [...VESSEL_LAYERS, DETECTION_LAYER]) {
+      for (const layer of [...VESSEL_LAYERS, DETECTION_LAYER, DARK_LAYER]) {
         instance.on("mouseenter", layer, () => {
           instance.getCanvas().style.cursor = "pointer";
         });
@@ -334,7 +456,7 @@ export function VesselMap({
       map.current = null;
       setLoaded(false);
     };
-  }, [onSelect]);
+  }, [onSelect, onSelectEvent]);
 
   useEffect(() => {
     const instance = map.current;
@@ -371,6 +493,35 @@ export function VesselMap({
     ) as maplibregl.GeoJSONSource;
     source?.setData(toDetectionFeatures(detections));
   }, [detections, loaded]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !loaded) return;
+    const source = instance.getSource(DARK_SOURCE) as maplibregl.GeoJSONSource;
+    source?.setData(toDarkFeatures(darkEvents));
+  }, [darkEvents, loaded]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !loaded) return;
+    const source = instance.getSource(EVENT_AIS_SOURCE) as maplibregl.GeoJSONSource;
+    source?.setData(toNearestAisFeatures(selectedEvent));
+    instance.setFilter("dark-selected", ["==", ["get", "id"], selectedEvent?.id ?? -1]);
+  }, [selectedEvent, loaded]);
+
+  // The context panel narrows the map when it opens: bring a newly selected
+  // candidate into view - once per selection, not on every events refresh.
+  const selectedId = selectedEvent?.id ?? null;
+  const selectedLon = selectedEvent?.lon ?? null;
+  const selectedLat = selectedEvent?.lat ?? null;
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !loaded || selectedId == null || selectedLon == null || selectedLat == null) {
+      return;
+    }
+    instance.easeTo({ center: [selectedLon, selectedLat], duration: 600 });
+    // Coordinates are read with the id; a refresh of the same event must not re-centre.
+  }, [selectedId, loaded]);
 
   useEffect(() => {
     const instance = map.current;
@@ -452,6 +603,15 @@ function passAgeOpacity(): maplibregl.ExpressionSpecification {
   ];
 }
 
+/**
+ * Dark-vessel candidates fade with age too, but stay legible: fusion runs days
+ * after a pass, so every candidate is old, and they are the visual priority.
+ * The panel states the exact age.
+ */
+function darkAgeOpacity(): maplibregl.ExpressionSpecification {
+  return ["interpolate", ["linear"], ["get", "ageHours"], 0, 1.0, 336, 0.75, 1440, 0.55];
+}
+
 /** Explain a radar ring: when it was seen, by what, and what it is not. */
 function showDetectionPopup(
   instance: MapLibreMap,
@@ -483,7 +643,8 @@ function showDetectionPopup(
     root.append(row);
   }
   const note = document.createElement("p");
-  note.textContent = "Not yet matched against AIS.";
+  note.textContent =
+    "This ring alone says nothing about AIS. Dark-vessel candidates are marked separately.";
   root.append(note);
 
   new maplibregl.Popup({ maxWidth: "280px" })

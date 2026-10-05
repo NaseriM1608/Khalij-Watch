@@ -285,3 +285,47 @@ body {
 .radar-popup div span:first-child { color: var(--muted); }
 .radar-popup div span:last-child { text-align: right; font-variant-numeric: tabular-nums; }
 .radar-popup p { margin: 6px 0 0; color: var(--muted); font-size: 10px; }
+
+/* Dark-vessel candidates: thicker rings than plain radar detections. */
+.ring-dark { width: 12px; height: 12px; border-width: 2.5px; }
+.tier-key { margin-top: 8px; }
+.tier-key li {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 3px 6px;
+  font-size: 11px;
+}
+
+.why-dark,
+.nearest-ais {
+  margin: 14px 0;
+  border: 1px solid rgba(255, 140, 26, 0.35);
+  background: rgba(255, 140, 26, 0.07);
+  border-radius: 5px;
+  padding: 10px 12px;
+}
+.why-dark h3,
+.nearest-ais h3 {
+  margin: 0 0 8px;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #ffc98a;
+}
+.why-dark p { margin: 0; font-size: 11px; line-height: 1.5; }
+.nearest-ais { border-color: var(--line); background: var(--panel-2); }
+.nearest-ais h3 { color: var(--muted); }
+.nearest-ais ul { margin: 0; padding: 0; list-style: none; }
+.nearest-ais li { display: grid; gap: 2px; }
+.nearest-ais li + li { margin-top: 8px; }
+.nearest-ais strong { font-size: 11px; font-weight: 600; }
+.nearest-ais span { font-size: 10px; color: var(--muted); line-height: 1.45; }
+.nearest-ais .cells { font-variant-numeric: tabular-nums; }
+.scene-name { font-size: 10px; word-break: break-all; }
+.why-dark .caveat {
+  margin: 8px 0 0;
+  font-size: 10px;
+  line-height: 1.45;
+  color: #ffb3b3;
+}
