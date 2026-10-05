@@ -109,6 +109,8 @@ export interface SarDetection {
   study_area?: string | null;
   /** A detector configuration measured against GFW, in a study box. */
   tested?: boolean;
+  /** The detection's satellite image on disk; null until it is cut. */
+  chip?: ChipImage | null;
 }
 
 /** One box of one pass a detector searched (/api/analysed). */
@@ -304,23 +306,41 @@ export const api = {
   track: (mmsi: number, hours = 24) =>
     getJson<Track>(`/api/vessels/${mmsi}/track?hours=${hours}`),
   scenes: (days = 14) => getJson<ScenesResponse>(`/api/scenes?days=${days}`),
-  detections: (days = 14) =>
-    getJson<DetectionsResponse>(`/api/detections?days=${days}`),
+  /** The product model's detections only, unless another detector is asked for. */
+  detections: (days = 14, detector = "product") =>
+    getJson<DetectionsResponse>(`/api/detections?days=${days}&detector=${detector}`),
   darkVessels: () => getJson<EventsResponse>("/api/events?type=DARK_VESSEL"),
-  analysed: (days = 14) => getJson<AnalysedResponse>(`/api/analysed?days=${days}`),
+  analysed: (days = 14, detector = "product") =>
+    getJson<AnalysedResponse>(`/api/analysed?days=${days}&detector=${detector}`),
   /**
    * Served from disk; the browser never causes a read of the radar scene itself.
    * The query names the chip's content (scene, position, cut time), so an event
    * id that re-fusion gave to another detection can never show a cached image.
    */
-  chipUrl: (eventId: number, pol: Polarisation, chip: DarkEvidence["chip"], attempt = 0) => {
-    const params = new URLSearchParams({
-      v: `${chip.scene}/${chip.lat}_${chip.lon}/${chip.image?.cut_at ?? ""}`,
-    });
-    if (attempt > 0) params.set("attempt", String(attempt));
-    return `/api/events/${eventId}/chip/${pol}?${params}`;
-  },
+  chipUrl: (eventId: number, pol: Polarisation, chip: DarkEvidence["chip"], attempt = 0) =>
+    `/api/events/${eventId}/chip/${pol}?${chipQuery(chip.scene, chip.lat, chip.lon, chip.image, attempt)}`,
+  /** A detection's satellite image, keyed by its content like a candidate's. */
+  detectionChipUrl: (detection: SarDetection, pol: Polarisation, attempt = 0) =>
+    `/api/detections/${detection.id}/chip/${pol}?${chipQuery(
+      detection.product_name ?? "",
+      detection.lat,
+      detection.lon,
+      detection.chip,
+      attempt,
+    )}`,
 };
+
+function chipQuery(
+  scene: string,
+  lat: number,
+  lon: number,
+  image: ChipImage | null | undefined,
+  attempt: number,
+): URLSearchParams {
+  const params = new URLSearchParams({ v: `${scene}/${lat}_${lon}/${image?.cut_at ?? ""}` });
+  if (attempt > 0) params.set("attempt", String(attempt));
+  return params;
+}
 
 // As in core/geo.py, so overlays land where core/sar/display.py sampled.
 const EARTH_RADIUS_M = 6_371_008.8;

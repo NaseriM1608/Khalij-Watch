@@ -8,6 +8,7 @@ to point outside the chip folder.
 
 from __future__ import annotations
 
+import datetime as dt
 from pathlib import Path, PurePosixPath
 
 import pytest
@@ -16,8 +17,12 @@ from core.fusion.chips import (
     CHIP_PIXEL_M,
     CHIP_PX,
     chip_file,
+    chip_file_at,
+    chip_index,
     chip_relpath,
+    image_in_index,
     image_meta,
+    stored_image,
     with_chip_image,
 )
 
@@ -109,3 +114,33 @@ def test_a_malformed_card_finds_no_chip(tmp_path, card):
 def test_the_image_metadata_carries_the_cut_version_and_the_no_data_share():
     meta = image_meta(["vv"], cut_at="2026-10-05T08:08:00+00:00", no_data=0.25)
     assert (meta["cut_at"], meta["no_data"]) == ("2026-10-05T08:08:00+00:00", 0.25)
+
+
+def test_a_chip_on_disk_is_found_by_scene_and_position(tmp_path):
+    path = store(tmp_path, "vv")
+    assert chip_file_at(tmp_path, SCENE, LON, LAT, "vv") == path.resolve()
+    assert chip_file_at(tmp_path, SCENE, LON, LAT, "vh") is None
+    assert chip_file_at(tmp_path, "../x", LON, LAT, "vv") is None
+
+
+def test_the_image_on_disk_says_which_polarisations_exist_and_when_they_were_cut(tmp_path):
+    assert stored_image(tmp_path, SCENE, LON, LAT) is None
+    store(tmp_path, "vh")
+    assert stored_image(tmp_path, SCENE, LON, LAT) is None  # no VV, no chip
+    vv = store(tmp_path, "vv")
+    image = stored_image(tmp_path, SCENE, LON, LAT)
+    assert image["pols"] == ["vv", "vh"]
+    cut = dt.datetime.fromisoformat(image["cut_at"])
+    assert cut == dt.datetime.fromtimestamp(vv.stat().st_mtime, dt.UTC)
+    assert image["no_data"] is None
+
+
+def test_a_scenes_chips_are_listed_once_and_read_like_stored_image(tmp_path):
+    """One folder listing per scene replaces several file checks per detection."""
+    store(tmp_path, "vv")
+    store(tmp_path, "vh")
+    index = chip_index(tmp_path, SCENE)
+    assert image_in_index(index, LON, LAT) == stored_image(tmp_path, SCENE, LON, LAT)
+    assert image_in_index(index, LON + 0.01, LAT) is None
+    assert chip_index(tmp_path, "../x") == {}
+    assert chip_index(tmp_path, "S1D_NO_FOLDER.SAFE") == {}

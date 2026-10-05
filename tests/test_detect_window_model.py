@@ -54,6 +54,7 @@ def stubs(tmp_path, monkeypatch):
         coast_calls=0,
         stored=[],
         versions=[],
+        chips=[],
     )
     FakeRunner.created = []
 
@@ -79,6 +80,13 @@ def stubs(tmp_path, monkeypatch):
     monkeypatch.setattr(dw, "coastline_mask", coastline_mask)
     monkeypatch.setattr("core.inference.runner.PointDetectorRunner", FakeRunner)
     monkeypatch.setattr(dw, "store_detections", store_detections)
+    monkeypatch.setattr(
+        dw,
+        "cut_found_chips",
+        lambda found, scene, window, bands, _product, root: state.chips.append(
+            (found, scene, window, bands.shape, root)
+        ),
+    )
     state.args = argparse.Namespace(
         model=model, no_coastline=False, coast_buffer_m=500.0, no_store=False
     )
@@ -86,7 +94,27 @@ def stubs(tmp_path, monkeypatch):
 
 
 def run(stubs):
-    return dw.run_model(stubs.args, SimpleNamespace(database_url=None), BOX, PRODUCT)
+    settings = SimpleNamespace(database_url=None, data_dir=Path("data-test"))
+    return dw.run_model(stubs.args, settings, BOX, PRODUCT)
+
+
+def test_the_stored_detections_get_their_images_from_the_pixels_read(stubs):
+    """Each detection's image is cut from the window the model searched, with no new read."""
+    assert run(stubs) == 0
+
+    ((found, scene, window, shape, root),) = stubs.chips
+    assert found == stubs.stored[0] and len(found) == 2
+    assert (scene, window) == (stubs.scene, stubs.window)
+    assert shape == (2, stubs.window.height, stubs.window.width)
+    assert root == Path("data-test") / "chips"
+
+
+def test_no_images_are_cut_when_nothing_is_stored(stubs):
+    stubs.args.no_store = True
+
+    assert run(stubs) == 0
+
+    assert stubs.chips == []
 
 
 def test_the_coastline_is_masked_by_default(stubs):

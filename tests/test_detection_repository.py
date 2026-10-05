@@ -347,3 +347,24 @@ def test_a_named_detector_or_all_filters_accordingly(session, detections):
 def test_an_unknown_detector_is_refused(detections):
     with pytest.raises(ValueError, match="detector"):
         detections.in_bbox(WINDOW, detector="bogus")
+
+
+def test_one_detection_is_read_by_id_and_a_version_can_be_chosen(session, detections):
+    """The console shows the product model's rows only, not a superseded run's."""
+    scene_id = add_scene(session)
+    for version, lon in (("kaggle-v1", 56.51), ("kaggle-v2", 56.52)):
+        detections.replace_in_bbox(
+            scene_id,
+            BBox(lon - 0.001, 25.199, lon + 0.001, 25.201),
+            [Point(lon, 25.2, 0.8)],
+            polarisation="DV",
+            detector="pointdet",
+            detector_version=version,
+            confidence=1.0,
+        )
+    (v2,) = detections.in_bbox(
+        BBox(56.0, 25.0, 57.0, 26.0), detector="pointdet", detector_version="kaggle-v2"
+    )
+    assert v2.lon == 56.52
+    assert detections.get(v2.id) == v2
+    assert detections.get(v2.id + 100) is None

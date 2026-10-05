@@ -20,17 +20,32 @@ import pytest
 
 rasterio = pytest.importorskip("rasterio")
 
-from core.db.repository import EventRepository, NewEvent, SceneRepository  # noqa: E402
+from core.db.repository import (  # noqa: E402
+    DetectionRepository,
+    EventRepository,
+    NewEvent,
+    SceneRepository,
+)
 from core.db.session import (  # noqa: E402
     create_all,
     create_db_engine,
     make_session_factory,
     session_scope,
 )
+from core.db.spatial import BBox  # noqa: E402
 from core.fusion.chips import CHIP_STRETCH_DN, chip_relpath, image_meta  # noqa: E402
 from core.sar.display import db_stretch  # noqa: E402
+from core.sar.georef import SceneGeoref  # noqa: E402
 from core.sar.reader import S3AccessError  # noqa: E402
-from scripts.cut_chips import ChipResult, cut_event_chips, open_scene_bands  # noqa: E402
+from core.sar.windows import PixelWindow  # noqa: E402
+from scripts.cut_chips import (  # noqa: E402
+    ChipResult,
+    HeldBand,
+    cut_detection_chips,
+    cut_event_chips,
+    cut_stored_detection_chips,
+    open_scene_bands,
+)
 from tests.chip_fakes import (  # noqa: E402
     LAT,
     LON,
@@ -319,3 +334,147 @@ def test_other_failures_opening_vh_are_not_hidden():
         open_scene_bands(SCENE, S3_PATH, opener=opener),
     ):
         pass
+
+
+# --------------------------------------------------------------------------
+# Every model detection's image, cut while it is found
+# --------------------------------------------------------------------------
+
+
+@dataclass(frozen=True)
+class Point:
+    """Shaped like a stored detection target (core.inference.runner.PointDetection)."""
+
+    lon: float
+    lat: float
+    confidence: float = 0.9
+    length_m: float | None = None
+    width_m: float | None = None
+    heading_deg: float | None = None
+    pixel_count: int | None = None
+    peak_amplitude: float | None = None
+
+
+def held_around(lon: float, lat: float, half_px: int) -> tuple[dict, SceneGeoref]:
+    """Both bands as detect_window holds them: one window read around a point."""
+    grid = load_grid()
+    georef = SceneGeoref(width=grid["width"], height=grid["height"], gcps=load_gcps(grid))
+    rows, cols = georef.raster_coords([lon], [lat])
+    window = PixelWindow(int(cols[0]) - half_px, int(rows[0]) - half_px, 2 * half_px, 2 * half_px)
+    held = {
+        pol: HeldBand(
+            FakeBand(grid["width"], grid["height"], sea=sea).read(1, window),
+            row_off=window.row_off,
+            col_off=window.col_off,
+        )
+        for pol, sea in (("vv", SEA_DN), ("vh", VH_SEA_DN))
+    }
+    return held, georef
+
+
+def test_a_detections_image_is_cut_from_the_pixels_already_read(tmp_path):
+    held, georef = held_around(LON, LAT, half_px=400)
+    opener = Opener()
+    done = cut_detection_chips(
+        [(LON, LAT)],
+        held,
+        georef,
+        root=tmp_path,
+        scene=SCENE,
+        open_scene=lambda: opener(SCENE, S3_PATH),
+    )
+    assert (done.from_memory, done.read, done.failed) == (1, 0, 0)
+    assert opener.calls == []
+    for pol, sea in (("vv", SEA_DN), ("vh", VH_SEA_DN)):
+        grey, _ = decode_gray_png((tmp_path / chip_relpath(SCENE, LON, LAT, pol)).read_bytes())
+        low, high = CHIP_STRETCH_DN[pol]
+        assert (grey == db_stretch([sea], low_dn=low, high_dn=high)[0]).all(), pol
+
+
+def test_images_reaching_beyond_the_pixels_read_are_read_from_the_scene_once(tmp_path):
+    held, georef = held_around(LON, LAT, half_px=100)  # smaller than an image
+    opener = Opener()
+    near = (56.585, 25.29)
+    done = cut_detection_chips(
+        [(LON, LAT), near],
+        held,
+        georef,
+        root=tmp_path,
+        scene=SCENE,
+        open_scene=lambda: opener(SCENE, S3_PATH),
+    )
+    assert (done.from_memory, done.read, done.failed) == (0, 2, 0)
+    assert len(opener.calls) == 1
+    assert len(list(tmp_path.rglob("*.png"))) == 4
+
+
+def test_an_image_that_cannot_be_cut_does_not_stop_the_others(tmp_path):
+    held, georef = held_around(LON, LAT, half_px=400)
+    done = cut_detection_chips(
+        [OFF_SCENE, (LON, LAT)],
+        held,
+        georef,
+        root=tmp_path,
+        scene=SCENE,
+        open_scene=lambda: Opener()(SCENE, S3_PATH),
+    )
+    assert (done.from_memory, done.failed) == (1, 1)
+
+
+def store_points(factory, scene_id, points, version="kaggle-v2"):
+    with session_scope(factory) as session:
+        DetectionRepository(session).replace_in_bbox(
+            scene_id,
+            BBox(55.0, 24.0, 58.0, 27.0),
+            points,
+            polarisation="DV",
+            detector="pointdet",
+            detector_version=version,
+            confidence=0.0,
+        )
+
+
+def test_stored_product_detections_get_their_images_once(tmp_path):
+    factory, scene_id = make_factory([])
+    store_points(factory, scene_id, [Point(LON, LAT), Point(*NEAR)])
+    opener = Opener()
+    result = cut_stored_detection_chips(factory, scene_id, root=tmp_path, open_scene=opener)
+    assert result == ChipResult(cut=2, skipped=0, failed=0)
+    assert len(opener.calls) == 1
+    assert len(list(tmp_path.rglob("*.png"))) == 4
+    again = Opener()
+    assert cut_stored_detection_chips(
+        factory, scene_id, root=tmp_path, open_scene=again
+    ) == ChipResult(cut=0, skipped=2, failed=0)
+    assert again.calls == []
+
+
+def test_only_the_product_models_detections_get_images(tmp_path):
+    factory, scene_id = make_factory([])
+    store_points(factory, scene_id, [Point(LON, LAT)], version="kaggle-v1")
+    opener = Opener()
+    result = cut_stored_detection_chips(factory, scene_id, root=tmp_path, open_scene=opener)
+    assert result == ChipResult(cut=0, skipped=0, failed=0)
+    assert opener.calls == []
+
+
+def test_force_cuts_stored_detection_chips_again(tmp_path):
+    factory, scene_id = make_factory([])
+    store_points(factory, scene_id, [Point(LON, LAT)])
+    cut_stored_detection_chips(factory, scene_id, root=tmp_path, open_scene=Opener())
+    again = Opener()
+    result = cut_stored_detection_chips(
+        factory, scene_id, root=tmp_path, open_scene=again, force=True
+    )
+    assert result == ChipResult(cut=1, skipped=0, failed=0)
+    assert len(again.calls) == 1
+
+
+def test_a_detection_with_only_its_vv_chip_gets_its_vh_chip(tmp_path):
+    factory, scene_id = make_factory([])
+    store_points(factory, scene_id, [Point(LON, LAT)])
+    cut_stored_detection_chips(factory, scene_id, root=tmp_path, open_scene=Opener(pols=("vv",)))
+    assert not (tmp_path / chip_relpath(SCENE, LON, LAT, "vh")).exists()
+    result = cut_stored_detection_chips(factory, scene_id, root=tmp_path, open_scene=Opener())
+    assert result.cut == 1
+    assert (tmp_path / chip_relpath(SCENE, LON, LAT, "vh")).is_file()

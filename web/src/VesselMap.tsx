@@ -70,6 +70,8 @@ interface Props {
   selectedEvent: AnalystEvent | null;
   onSelectEvent: (id: number | null) => void;
   analysed: AnalysedWindow[];
+  selectedDetectionId: number | null;
+  onSelectDetection: (id: number | null) => void;
 }
 
 function toFeatureCollection(vessels: Vessel[]): GeoJSON.FeatureCollection {
@@ -101,38 +103,13 @@ function toDetectionFeatures(
     features: detections.map((detection) => ({
       type: "Feature",
       geometry: { type: "Point", coordinates: [detection.lon, detection.lat] },
-      // Display strings are prepared here so the popup never has to
-      // interpret missing values.
-      properties: {
-        id: detection.id,
-        ageHours: detection.age_hours,
-        pass: [detection.satellite, detection.polarisation]
-          .filter(Boolean)
-          .join(" · "),
-        size:
-          detection.length_m != null && detection.width_m != null
-            ? `${Math.round(detection.length_m)} × ${Math.round(detection.width_m)} m`
-            : "not measured",
-        heading: headingLabel(detection.heading_deg),
-        detector: [detection.detector, detection.detector_version]
-          .filter(Boolean)
-          .join(" "),
-        measured:
-          detection.tested === undefined
-            ? "unknown"
-            : detection.tested
-              ? "yes (tested in this UAE study box)"
-              : "no: accuracy not measured here",
-      },
+      properties: { id: detection.id, ageHours: detection.age_hours },
     })),
   };
 }
 
+/** The product model's searches (/api/analysed?detector=product), as drawn. */
 function toAnalysedFeatures(windows: AnalysedWindow[]): GeoJSON.FeatureCollection {
-  // /api/detections (auto) draws the model's rings on a pass where it ran, CFAR's elsewhere.
-  const modelPasses = new Set(
-    windows.filter((w) => w.detector === "pointdet").map((w) => w.scene_id),
-  );
   return {
     type: "FeatureCollection",
     features: windows
@@ -151,7 +128,6 @@ function toAnalysedFeatures(windows: AnalysedWindow[]): GeoJSON.FeatureCollectio
           detector: [window.detector, window.detector_version, window.polarisation]
             .filter(Boolean)
             .join(" "),
-          shown: (window.detector === "pointdet") === modelPasses.has(window.scene_id),
           share: window.searched_share,
         },
       })),
@@ -200,13 +176,6 @@ function toNearestAisFeatures(event: AnalystEvent | null): GeoJSON.FeatureCollec
   return { type: "FeatureCollection", features };
 }
 
-/** Radar cannot tell bow from stern, so both directions are stated. */
-function headingLabel(headingDeg: number | null): string {
-  if (headingDeg == null) return "not measured";
-  const axis = Math.round(headingDeg) % 180;
-  return `${axis}° or ${axis + 180}°`;
-}
-
 function bboxToPolygon(bbox: BBox): GeoJSON.Feature {
   const { min_lon, min_lat, max_lon, max_lat } = bbox;
   return {
@@ -239,6 +208,8 @@ export function VesselMap({
   selectedEvent,
   onSelectEvent,
   analysed,
+  selectedDetectionId,
+  onSelectDetection,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -380,6 +351,19 @@ export function VesselMap({
         },
       });
 
+      instance.addLayer({
+        id: "detection-selected",
+        type: "circle",
+        source: DETECTION_SOURCE,
+        filter: ["==", ["get", "id"], -1],
+        paint: {
+          "circle-radius": ["interpolate", ["linear"], ["zoom"], 5, 7, 12, 16],
+          "circle-color": "transparent",
+          "circle-stroke-width": 2,
+          "circle-stroke-color": "#ffffff",
+        },
+      });
+
       // Contacts whose own report contradicts itself. Drawn first so the
       // halo sits behind the vessel symbol rather than obscuring it.
       instance.addLayer({
@@ -505,11 +489,9 @@ export function VesselMap({
           layers: [DARK_LAYER],
         });
         if (dark.length) {
-          onSelect(null);
           onSelectEvent(dark[0].properties?.id as number);
           return;
         }
-        onSelectEvent(null);
         const hits = instance.queryRenderedFeatures(event.point, {
           layers: VESSEL_LAYERS,
         });
@@ -517,14 +499,17 @@ export function VesselMap({
           onSelect(hits[0].properties?.mmsi as number);
           return;
         }
-        onSelect(null);
+        // A vessel in a satellite image opens its card, image beside it.
         const seen = instance.queryRenderedFeatures(event.point, {
           layers: [DETECTION_LAYER],
         });
         if (seen.length) {
-          showDetectionPopup(instance, seen[0]);
+          onSelectDetection(seen[0].properties?.id as number);
           return;
         }
+        onSelect(null);
+        onSelectEvent(null);
+        onSelectDetection(null);
         const searched = instance.queryRenderedFeatures(event.point, {
           layers: [ANALYSED_FILL],
         });
@@ -547,7 +532,7 @@ export function VesselMap({
       map.current = null;
       setLoaded(false);
     };
-  }, [onSelect, onSelectEvent]);
+  }, [onSelect, onSelectEvent, onSelectDetection]);
 
   useEffect(() => {
     const instance = map.current;
@@ -647,6 +632,25 @@ export function VesselMap({
   useEffect(() => {
     const instance = map.current;
     if (!instance || !loaded) return;
+    instance.setFilter("detection-selected", ["==", ["get", "id"], selectedDetectionId ?? -1]);
+  }, [selectedDetectionId, loaded]);
+
+  // The card narrows the map when it opens: keep the selected ring in view,
+  // once per selection, never zooming.
+  const selectedDetectionPoint = detections.find((d) => d.id === selectedDetectionId) ?? null;
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !loaded || !selectedDetectionPoint) return;
+    instance.easeTo({
+      center: [selectedDetectionPoint.lon, selectedDetectionPoint.lat],
+      duration: 600,
+    });
+    // Coordinates are read with the id; a refresh of the same detection must not re-centre.
+  }, [selectedDetectionId, loaded]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !loaded) return;
     instance.setFilter("vessel-selected", [
       "==",
       ["get", "mmsi"],
@@ -715,48 +719,6 @@ function darkAgeOpacity(): maplibregl.ExpressionSpecification {
   return ["interpolate", ["linear"], ["get", "ageHours"], 0, 1.0, 336, 0.75, 1440, 0.55];
 }
 
-/** Explain a radar ring: when it was seen, by what, and what it is not. */
-function showDetectionPopup(
-  instance: MapLibreMap,
-  feature: maplibregl.MapGeoJSONFeature,
-): void {
-  const properties = feature.properties ?? {};
-  const coordinates = (feature.geometry as GeoJSON.Point).coordinates;
-  const rows: [string, string][] = [
-    ["Seen", formatAge(Number(properties.ageHours) * 3600)],
-    ["Pass", String(properties.pass ?? "")],
-    ["Size", String(properties.size ?? "")],
-    ["Heading", String(properties.heading ?? "")],
-    ["Detector", String(properties.detector ?? "")],
-    ["Detector checked here", String(properties.measured ?? "unknown")],
-  ];
-
-  // Built from DOM nodes with textContent, never from an HTML string.
-  const root = document.createElement("div");
-  root.className = "radar-popup";
-  const title = document.createElement("strong");
-  title.textContent = "Radar detection";
-  root.append(title);
-  for (const [label, value] of rows) {
-    const row = document.createElement("div");
-    const name = document.createElement("span");
-    name.textContent = label;
-    const text = document.createElement("span");
-    text.textContent = value;
-    row.append(name, text);
-    root.append(row);
-  }
-  const note = document.createElement("p");
-  note.textContent =
-    "This ring alone says nothing about AIS. Dark-vessel candidates are marked separately.";
-  root.append(note);
-
-  new maplibregl.Popup({ maxWidth: "280px" })
-    .setLngLat([coordinates[0], coordinates[1]])
-    .setDOMContent(root)
-    .addTo(instance);
-}
-
 /** Explain a searched area: which passes, when, what was found, and how far to trust it. */
 function showAnalysedPopup(
   instance: MapLibreMap,
@@ -778,7 +740,6 @@ function showAnalysedPopup(
     const share = Number(properties.share);
     text.textContent = [
       `${count} detection${count === 1 ? "" : "s"} · ${properties.detector ?? ""}`,
-      properties.shown ? "rings shown" : "rings not shown (the model's are)",
       share < 0.99 ? `${Math.round(share * 100)}% of the box imaged` : "",
       properties.tested ? "tested here" : "accuracy unknown",
     ]

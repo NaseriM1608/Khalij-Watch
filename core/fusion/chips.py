@@ -11,6 +11,8 @@ outside the chip folder.
 
 from __future__ import annotations
 
+import datetime as dt
+import os
 import re
 from collections.abc import Mapping, Sequence
 from pathlib import Path, PurePosixPath
@@ -38,7 +40,12 @@ def chip_relpath(scene: str, lon: float, lat: float, pol: str) -> PurePosixPath:
         raise ValueError(f"not a Sentinel-1 product name: {scene!r}")
     if pol not in POLARISATIONS:
         raise ValueError(f"no chips for polarisation {pol!r}")
-    return PurePosixPath(scene.removesuffix(".SAFE"), f"{lat:.5f}_{lon:.5f}_{pol}.png")
+    return PurePosixPath(scene.removesuffix(".SAFE"), chip_name(lon, lat, pol))
+
+
+def chip_name(lon: float, lat: float, pol: str) -> str:
+    """A chip's file name within its scene's folder."""
+    return f"{lat:.5f}_{lon:.5f}_{pol}.png"
 
 
 def image_meta(
@@ -82,8 +89,17 @@ def chip_file(root: Path, evidence: Mapping[str, Any], pol: str) -> Path | None:
     lon, lat = chip.get("lon"), chip.get("lat")
     if not all(isinstance(v, int | float) and not isinstance(v, bool) for v in (lon, lat)):
         return None
+    return chip_file_at(root, chip.get("scene"), lon, lat, pol)
+
+
+def chip_file_at(root: Path, scene: str, lon: float, lat: float, pol: str) -> Path | None:
+    """The chip on disk for a scene and position in one polarisation, or None.
+
+    Also None for a name that is not a product name, so a stored value can
+    never point outside the chip folder.
+    """
     try:
-        relative = chip_relpath(chip.get("scene"), lon, lat, pol)
+        relative = chip_relpath(scene, lon, lat, pol)
     except ValueError:
         return None
     base = root.resolve()
@@ -91,3 +107,44 @@ def chip_file(root: Path, evidence: Mapping[str, Any], pol: str) -> Path | None:
     if not path.is_relative_to(base) or not path.is_file():
         return None
     return path
+
+
+def stored_image(root: Path, scene: str, lon: float, lat: float) -> dict | None:
+    """What the chips on disk for a scene and position hold (``image_meta``); None without a VV chip.
+
+    Detections are not recorded with their chips: the files are the record,
+    named by scene and position, shared with the dark-vessel cards.
+    """
+    vv = chip_file_at(root, scene, lon, lat, "vv")
+    if vv is None:
+        return None
+    pols = [p for p in POLARISATIONS if chip_file_at(root, scene, lon, lat, p) is not None]
+    cut_at = dt.datetime.fromtimestamp(vv.stat().st_mtime, dt.UTC).isoformat()
+    return image_meta(pols, cut_at=cut_at, no_data=None)
+
+
+def chip_index(root: Path, scene: str) -> dict[str, float]:
+    """A scene's chip files and their times, from one folder listing; {} for none or a bad name.
+
+    The API reads every detection's chip from this rather than checking files
+    one by one: one listing per scene instead of several file checks per row.
+    """
+    try:
+        folder = root / chip_relpath(scene, 0.0, 0.0, "vv").parent
+    except ValueError:
+        return {}
+    try:
+        with os.scandir(folder) as entries:
+            return {e.name: e.stat().st_mtime for e in entries if e.is_file()}
+    except OSError:
+        return {}
+
+
+def image_in_index(index: Mapping[str, float], lon: float, lat: float) -> dict | None:
+    """``stored_image`` for one position, read from a scene's ``chip_index``."""
+    vv = index.get(chip_name(lon, lat, "vv"))
+    if vv is None:
+        return None
+    pols = [p for p in POLARISATIONS if chip_name(lon, lat, p) in index]
+    cut_at = dt.datetime.fromtimestamp(vv, dt.UTC).isoformat()
+    return image_meta(pols, cut_at=cut_at, no_data=None)

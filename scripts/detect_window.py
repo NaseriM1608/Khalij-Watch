@@ -32,6 +32,7 @@ import math
 import sys
 import time
 import warnings
+from collections.abc import Sequence
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -99,15 +100,28 @@ PREVIEW_MAX_SIDE = 1600
 MARKER_HALF = 7
 
 
-def latest_product_covering(lon: float, lat: float, box: BBox, days: int) -> SarProduct | None:
-    """The most recent readable scene whose footprint contains the point."""
-    since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
+def choose_product(
+    products: Sequence[SarProduct], lon: float, lat: float, scene: str | None = None
+) -> SarProduct | None:
+    """The newest readable scene whose footprint contains the point; with ``scene``, that one only."""
     covering = [
         p
-        for p in search(box, since=since)
-        if p.is_cog and p.online and p.s3_path and point_in_polygon(lon, lat, p.footprint)
+        for p in products
+        if p.is_cog
+        and p.online
+        and p.s3_path
+        and point_in_polygon(lon, lat, p.footprint)
+        and (scene is None or p.name == scene)
     ]
     return max(covering, key=lambda p: p.acq_start) if covering else None
+
+
+def latest_product_covering(
+    lon: float, lat: float, box: BBox, days: int, scene: str | None = None
+) -> SarProduct | None:
+    """The most recent readable scene whose footprint contains the point (or the named one)."""
+    since = dt.datetime.now(dt.UTC) - dt.timedelta(days=days)
+    return choose_product(search(box, since=since), lon, lat, scene)
 
 
 def platform_mask(
@@ -269,6 +283,35 @@ def store_detections(
         return written
 
 
+def cut_found_chips(
+    found: Sequence[object], scene: SceneGeoref, window: PixelWindow, bands, product, root: Path
+) -> None:
+    """Each stored detection's satellite-image chip, cut from the pixels the model searched.
+
+    Chips reaching beyond those pixels are read from the scene (opened once);
+    a chip failure never fails the detection run. scripts/cut_chips.py.
+    """
+    from core.inference.contract import BAND_ORDER
+    from scripts.cut_chips import HeldBand, cut_detection_chips, open_scene_bands
+
+    held = {
+        pol: HeldBand(bands[i], row_off=window.row_off, col_off=window.col_off)
+        for i, pol in enumerate(BAND_ORDER)
+    }
+    done = cut_detection_chips(
+        [(d.lon, d.lat) for d in found],
+        held,
+        scene,
+        root=root,
+        scene=product.name,
+        open_scene=lambda: open_scene_bands(product.name, product.s3_path),
+    )
+    print(
+        f"images   : {done.from_memory} from the pixels read, {done.read} read again "
+        f"(near the box edge), {done.failed} failed -> {root}"
+    )
+
+
 def run_model(args: argparse.Namespace, settings, box: BBox, product: SarProduct) -> int:
     """Detect with the exported point detector on VV+VH, under the same masks as CFAR."""
     from core.inference.runner import DETECTOR, PointDetection, PointDetectorRunner
@@ -315,6 +358,7 @@ def run_model(args: argparse.Namespace, settings, box: BBox, product: SarProduct
             settings.database_url, product, box, found, "dv", version, detector=DETECTOR
         )
         print(f"database : {written} detections stored ({DETECTOR}, {version})")
+        cut_found_chips(found, scene, window, bands, product, settings.data_dir / "chips")
     return 0
 
 
@@ -335,6 +379,10 @@ def main() -> int:
     parser.add_argument("--lat", type=float, required=True)
     parser.add_argument("--size-km", type=float, default=20.0)
     parser.add_argument("--days", type=int, default=10, help="catalogue lookback")
+    parser.add_argument(
+        "--scene",
+        help="product name of an older pass to read (within --days) instead of the newest",
+    )
     parser.add_argument("--pol", choices=("vv", "vh"), default="vh")
     parser.add_argument("--pfa", type=float, default=1e-6)
     parser.add_argument(
@@ -364,7 +412,7 @@ def main() -> int:
 
     settings = load_settings()
     box = box_around(args.lon, args.lat, args.size_km)
-    product = latest_product_covering(args.lon, args.lat, box, args.days)
+    product = latest_product_covering(args.lon, args.lat, box, args.days, args.scene)
     if product is None:
         print(f"no readable Sentinel-1 scene covers {args.lat}, {args.lon} in {args.days} days")
         return 1

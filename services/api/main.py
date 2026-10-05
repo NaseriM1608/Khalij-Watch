@@ -27,6 +27,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from core.areas import (
+    PRODUCT_DETECTOR,
+    PRODUCT_VERSION,
     STUDY_AREAS,
     clip_to_box,
     inside_study_box,
@@ -49,11 +51,29 @@ from core.db.repository import (
 )
 from core.db.session import create_all, create_db_engine, make_session_factory, session_scope
 from core.db.spatial import BBox
-from core.fusion.chips import chip_file
+from core.fusion.chips import chip_file, chip_file_at, chip_index, image_in_index
 from core.sar.catalogue import parse_polygon_wkt
 
 logger = logging.getLogger(__name__)
 
+
+def _same_detection(key: str, detection: DetectionView) -> bool:
+    """Whether a client's ``scene/lat_lon/...`` key names this detection (to about 1 cm)."""
+    scene, _, rest = key.partition("/")
+    position = rest.partition("/")[0]
+    try:
+        lat, lon = (float(part) for part in position.split("_"))
+    except ValueError:
+        return False
+    return (
+        scene == detection.product_name
+        and abs(lat - detection.lat) < 1e-7
+        and abs(lon - detection.lon) < 1e-7
+    )
+
+
+# SQLite's largest INTEGER: a larger id cannot even be looked up.
+MAX_ROW_ID = 2**63 - 1
 # How often the websocket pushes a refreshed viewport.
 STREAM_INTERVAL_S = 5.0
 MAX_TRACK_HOURS = 24 * 7
@@ -274,36 +294,77 @@ async def detections(
     bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
     days: int = Query(default=14, ge=1, le=365),
     limit: int = Query(default=20_000, ge=1, le=100_000),
-    detector: Literal["auto", "cfar", "pointdet", "all"] = Query(default="auto"),
+    detector: Literal["auto", "cfar", "pointdet", "all", "product"] = Query(default="auto"),
 ) -> dict[str, Any]:
-    """Radar detections from recent passes, newest pass first.
+    """Vessels detected in Sentinel-1 satellite images of recent passes, newest pass first.
 
     Each carries the age of the pass that saw it. A detection is a snapshot of
     one moment, hours or days old, and the UI must never draw it as a live
     contact. By default each pass shows one detector's results - the model's
-    where it ran, CFAR's elsewhere - so no vessel is drawn twice.
+    where it ran, CFAR's elsewhere - so no vessel is drawn twice; "product"
+    keeps the product model's detections only. Passes with dark-vessel events
+    are included whatever their age, as their events and searched areas are.
+    ``chip`` says whether the detection's image is on disk
+    (GET /api/detections/{id}/chip/{pol}).
     """
     box = _parse_bbox(bbox)
     now = dt.datetime.now(dt.UTC)
     since = now - dt.timedelta(days=days)
+    product = detector == "product"
     with session_scope(_sessions()) as session:
         found = DetectionRepository(session).in_bbox(
-            box, since=since, limit=limit, detector=detector
+            box,
+            since=since,
+            limit=limit,
+            detector=PRODUCT_DETECTOR if product else detector,
+            detector_version=PRODUCT_VERSION if product else None,
+            include_fused=True,
         )
+    root = _chips_root()
+    # One folder listing per scene, not several file checks per detection.
+    indexes = {name: chip_index(root, name) for name in {d.product_name for d in found}}
     return {
         "generated_at": now.isoformat(),
         "bbox": _bbox_json(box),
         "detector": detector,
         "count": len(found),
-        "detections": [_detection_to_json(d, now) for d in found],
+        "detections": [_detection_to_json(d, now, indexes) for d in found],
         "attribution": "Contains modified Copernicus Sentinel data",
     }
+
+
+@app.get("/api/detections/{detection_id}/chip/{pol}")
+async def detection_chip(
+    pol: Literal["vv", "vh"],
+    detection_id: int = PathParam(ge=1, le=MAX_ROW_ID),
+    v: str | None = Query(default=None, description="scene/lat_lon/cut time the client holds"),
+) -> FileResponse:
+    """A detection's satellite image: north up, 10 m pixels, a fixed dB stretch.
+
+    Cut while the detection was found (scripts/detect_window.py) or later
+    (scripts/cut_chips.py --detections) and served from disk; 404 until cut.
+    Always revalidated: a re-run of a box replaces its detections and ids,
+    so a ``v`` key naming another scene or position gets 404, not that image.
+    """
+    with session_scope(_sessions()) as session:
+        detection = DetectionRepository(session).get(detection_id)
+    if detection is None:
+        raise HTTPException(status_code=404, detail=f"unknown detection {detection_id}")
+    if v is not None and not _same_detection(v, detection):
+        raise HTTPException(status_code=404, detail=f"detection {detection_id} has changed")
+    path = chip_file_at(_chips_root(), detection.product_name, detection.lon, detection.lat, pol)
+    if path is None:
+        raise HTTPException(
+            status_code=404, detail=f"no {pol} image stored for detection {detection_id}"
+        )
+    return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-cache"})
 
 
 @app.get("/api/analysed")
 async def analysed(
     bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
     days: int = Query(default=14, ge=1, le=365),
+    detector: Literal["all", "product"] = Query(default="all"),
 ) -> dict[str, Any]:
     """Where a detector searched recent and fused passes, and whether it was tested there.
 
@@ -320,6 +381,12 @@ async def analysed(
     now = dt.datetime.now(dt.UTC)
     with session_scope(_sessions()) as session:
         found = AnalysedWindowRepository(session).recent(box, since=now - dt.timedelta(days=days))
+    if detector == "product":
+        found = [
+            w
+            for w in found
+            if (w.detector, w.detector_version) == (PRODUCT_DETECTOR, PRODUCT_VERSION)
+        ]
     windows = [w for w in (_window_to_json(f, now) for f in found) if w["searched"]]
     return {
         "generated_at": now.isoformat(),
@@ -388,13 +455,9 @@ async def events(
     }
 
 
-# SQLite's largest INTEGER: a larger id cannot even be looked up.
-MAX_EVENT_ID = 2**63 - 1
-
-
 @app.get("/api/events/{event_id}/chip/{pol}")
 async def event_chip(
-    pol: Literal["vv", "vh"], event_id: int = PathParam(ge=1, le=MAX_EVENT_ID)
+    pol: Literal["vv", "vh"], event_id: int = PathParam(ge=1, le=MAX_ROW_ID)
 ) -> FileResponse:
     """An event's radar chip: north up, 10 m pixels, a fixed dB stretch (core/fusion/chips.py).
 
@@ -437,7 +500,9 @@ def _event_to_json(event: EventView, now: dt.datetime) -> dict[str, Any]:
     }
 
 
-def _detection_to_json(detection: DetectionView, now: dt.datetime) -> dict[str, Any]:
+def _detection_to_json(
+    detection: DetectionView, now: dt.datetime, indexes: dict[str, dict[str, float]]
+) -> dict[str, Any]:
     return {
         "id": detection.id,
         "scene_id": detection.scene_id,
@@ -463,6 +528,10 @@ def _detection_to_json(detection: DetectionView, now: dt.datetime) -> dict[str, 
         # A tested detector configuration, in a study box.
         "tested": study_area_of(detection.lon, detection.lat) is not None
         and is_tested(detection.detector, detection.detector_version, detection.polarisation),
+        # The detection's image on disk, or null until it is cut.
+        "chip": image_in_index(
+            indexes.get(detection.product_name, {}), detection.lon, detection.lat
+        ),
     }
 
 

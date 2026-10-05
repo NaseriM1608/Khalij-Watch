@@ -7,7 +7,7 @@
  *    what is on screen is synthetic rather than observed.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { VesselMap } from "./VesselMap";
 import {
   ANOMALY_LABELS,
@@ -15,6 +15,7 @@ import {
   AnalysedWindow,
   AnalystEvent,
   BBox,
+  ChipImage,
   CLASS_COLOURS,
   CLASS_LABELS,
   CoarseClass,
@@ -24,6 +25,7 @@ import {
   DetectionsResponse,
   EventsResponse,
   Health,
+  NearestAis,
   Polarisation,
   RADAR_COLOUR,
   SarDetection,
@@ -46,6 +48,9 @@ const RADAR_LOOKBACK_DAYS = 14;
 const NO_DETECTIONS: SarDetection[] = [];
 const NO_EVENTS: AnalystEvent[] = [];
 const NO_WINDOWS: AnalysedWindow[] = [];
+const NO_NEAREST: NearestAis[] = [];
+// The product model keeps peaks scoring at least this (run 2, chosen on validation).
+const MODEL_THRESHOLD = 0.6;
 const TIERS: ConfidenceTier[] = ["high", "medium", "low"];
 // The feed lists this many candidates; the count above it says how many exist.
 const FEED_LENGTH = 25;
@@ -82,6 +87,13 @@ export default function App() {
   const [darkError, setDarkError] = useState<string | null>(null);
   const [showDark, setShowDark] = useState(true);
   const [selectedEventId, setSelectedEventId] = useState<number | null>(null);
+  // Id and position: a re-run can give a detection's id to another one.
+  const [selectedDetectionKey, setSelectedDetectionKey] = useState<{
+    id: number;
+    lon: number;
+    lat: number;
+  } | null>(null);
+  const detectionsRef = useRef<SarDetection[]>([]);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
@@ -240,16 +252,41 @@ export default function App() {
 
   const selectVessel = useCallback((mmsi: number | null) => {
     setSelected(mmsi);
-    if (mmsi != null) setSelectedEventId(null);
+    if (mmsi != null) {
+      setSelectedEventId(null);
+      setSelectedDetectionKey(null);
+    }
   }, []);
   const selectEvent = useCallback((id: number | null) => {
     setSelectedEventId(id);
-    if (id != null) setSelected(null);
+    if (id != null) {
+      setSelected(null);
+      setSelectedDetectionKey(null);
+    }
+  }, []);
+  const selectDetection = useCallback((id: number | null) => {
+    const found = detectionsRef.current.find((d) => d.id === id);
+    setSelectedDetectionKey(found ? { id: found.id, lon: found.lon, lat: found.lat } : null);
+    if (found) {
+      setSelected(null);
+      setSelectedEventId(null);
+    }
   }, []);
 
   const selectedVessel = vessels.find((v) => v.mmsi === selected) ?? null;
   const selectedEvent =
     (showDark && dark?.events.find((e) => e.id === selectedEventId)) || null;
+  detectionsRef.current = radar?.detections ?? NO_DETECTIONS;
+  const selectedDetection =
+    (showRadar &&
+      selectedDetectionKey &&
+      radar?.detections.find(
+        (d) =>
+          d.id === selectedDetectionKey.id &&
+          d.lon === selectedDetectionKey.lon &&
+          d.lat === selectedDetectionKey.lat,
+      )) ||
+    null;
   const isSynthetic = attribution.length > 0 && attribution.every((s) => s === "synthetic");
 
   return (
@@ -339,19 +376,25 @@ export default function App() {
         </section>
 
         <section className="panel">
-          <h2>Radar detections</h2>
+          <h2>Vessels in satellite images</h2>
           <p className="hint">
-            Rings are objects the radar saw, whether or not they broadcast
-            anything. Each is a snapshot from one pass, not a live position.
-            A ring alone says nothing about AIS; passes fused with AIS mark
-            their dark-vessel candidates separately (below).
+            Yellow rings are the deep-learning model&rsquo;s detections in
+            Sentinel-1 radar satellite images, whether or not they broadcast
+            anything: most are vessels, some are false alarms. Click one to see
+            it in its image. Each is a snapshot from one pass, not a live
+            position; passes fused with AIS mark their dark-vessel candidates
+            separately (below). The CFAR baseline and the superseded first model
+            are not shown here.
           </p>
           <label className="legend">
             <span className="suspect-row">
               <input
                 type="checkbox"
                 checked={showRadar}
-                onChange={() => setShowRadar((v) => !v)}
+                onChange={() => {
+                  setShowRadar((v) => !v);
+                  setSelectedDetectionKey(null);
+                }}
               />
               <span className="ring" style={{ borderColor: RADAR_COLOUR }} />
               <span className="legend-label">
@@ -375,13 +418,13 @@ export default function App() {
           <ul className="legend searched-key">
             <li>
               <span className="box-swatch" />
-              <span className="legend-label">Searches by a detector tested there</span>
+              <span className="legend-label">Searched by the model, where it was tested</span>
               <span className="legend-count">{searchedCounts.tested}</span>
             </li>
             <li>
               <span className="box-swatch dashed" />
               <span className="legend-label">
-                Searches with accuracy unknown (untested detector, or outside the UAE study boxes)
+                Searched by the model, accuracy unknown here (outside the UAE study boxes)
               </span>
               <span className="legend-count">{searchedCounts.untested}</span>
             </li>
@@ -532,7 +575,7 @@ export default function App() {
               <dd>{health?.sar_scenes.toLocaleString() ?? "—"}</dd>
             </div>
             <div>
-              <dt>Radar detections</dt>
+              <dt>Detections stored (all detectors)</dt>
               <dd>{health?.detections.toLocaleString() ?? "—"}</dd>
             </div>
             <div>
@@ -571,20 +614,29 @@ export default function App() {
           selectedEvent={selectedEvent}
           onSelectEvent={selectEvent}
           analysed={showRadar ? (analysed?.windows ?? NO_WINDOWS) : NO_WINDOWS}
+          selectedDetectionId={selectedDetection?.id ?? null}
+          onSelectDetection={selectDetection}
         />
       </main>
 
-      <aside className={`context ${selectedVessel || selectedEvent ? "open" : ""}`}>
+      <aside
+        className={`context ${selectedVessel || selectedEvent || selectedDetection ? "open" : ""}`}
+      >
         {selectedEvent ? (
           <DarkVesselDetail event={selectedEvent} onClose={() => setSelectedEventId(null)} />
+        ) : selectedDetection ? (
+          <DetectionDetail
+            detection={selectedDetection}
+            onClose={() => setSelectedDetectionKey(null)}
+          />
         ) : selectedVessel ? (
           <VesselDetail vessel={selectedVessel} track={track} onClose={() => setSelected(null)} />
         ) : (
           <div className="empty">
             <h2>No contact selected</h2>
             <p>
-              Click a vessel to see its identity and recent track, or a red or
-              orange ring to see why a radar detection was called dark.
+              Click a yellow ring to see the vessel in its satellite image, or a
+              red or orange ring to see why it was called dark.
             </p>
           </div>
         )}
@@ -731,26 +783,38 @@ function hourStart(iso: string): number {
  * detection's ring and the nearest AIS vessels' hourly cells and tracks.
  * AIS is drawn in cyan, never white, so it cannot be taken for a radar echo.
  */
-function SarChip({ event }: { event: AnalystEvent }) {
-  const { chip, nearest_ais: nearest } = event.evidence;
-  const image = chip.image;
+function SarChip({
+  image,
+  imageUrl,
+  centre,
+  ringColour,
+  nearest,
+  passTs,
+}: {
+  image: ChipImage | null | undefined;
+  imageUrl: (pol: Polarisation, attempt: number) => string;
+  centre: { lon: number; lat: number };
+  ringColour: string;
+  /** AIS vessels to draw (dark-vessel candidates); none for a plain detection. */
+  nearest: NearestAis[];
+  passTs: string;
+}) {
   const [choice, setChoice] = useState<Polarisation>("vv");
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   if (!image || !image.north_up || image.pols.length === 0) {
-    return <p className="sar-chip-missing">No radar image stored for this candidate yet.</p>;
+    return <p className="sar-chip-missing">No satellite image stored for this detection yet.</p>;
   }
 
   const pol = image.pols.includes(choice) ? choice : image.pols[0];
-  const url = api.chipUrl(event.id, pol, chip, attempt);
+  const url = imageUrl(pol, attempt);
   const size = image.size_px;
   const toPx = (lon: number, lat: number) =>
-    chipPixel(lon, lat, chip.lon, chip.lat, image.pixel_m, size);
+    chipPixel(lon, lat, centre.lon, centre.lat, image.pixel_m, size);
   const bar = CHIP_SCALE_BAR_M / image.pixel_m;
   const acrossKm = ((size * image.pixel_m) / 1000).toFixed(2);
-  const passHour = hourStart(event.ts);
+  const passHour = hourStart(passTs);
   const half = AIS_CELL_DEG / 2;
-  const partlyBlind = image.no_data == null || image.no_data > 0;
   return (
     <figure className="sar-chip">
       <div className="chip-frame">
@@ -806,7 +870,7 @@ function SarChip({ event }: { event: AnalystEvent }) {
                 cx={size / 2}
                 cy={size / 2}
                 r={12}
-                stroke={DARK_COLOURS[tierOf(event)]}
+                stroke={ringColour}
               />
               <g className="chip-scale" transform={`translate(10 ${size - 10})`}>
                 <line x1={0} y1={0} x2={bar} y2={0} />
@@ -839,13 +903,94 @@ function SarChip({ event }: { event: AnalystEvent }) {
         </div>
       )}
       <figcaption>
-        What the radar saw, {acrossKm} km across, north up. Bright means a strong
-        echo, as from a steel hull; the ring marks the detection. Cyan squares are
-        the nearest AIS vessels&rsquo; hourly cells (about 1 km: the vessel was
-        somewhere inside during that hour; solid for the pass hour).
-        {partlyBlind && " Hatched areas were not imaged by the radar."}
+        The Sentinel-1 radar image, {acrossKm} km across, north up. Bright means a
+        strong echo, as from a steel hull; the ring marks the detection.
+        {nearest.length > 0 &&
+          " Cyan squares are the nearest AIS vessels\u2019 hourly cells (about 1 km: the vessel was somewhere inside during that hour; solid for the pass hour)."}
+        {image.no_data == null
+          ? " Hatched areas, if any, were not imaged by the radar."
+          : image.no_data > 0 && " Hatched areas were not imaged by the radar."}
       </figcaption>
     </figure>
+  );
+}
+
+/** A vessel the deep-learning model found in a Sentinel-1 image, with the image beside it. */
+function DetectionDetail({
+  detection,
+  onClose,
+}: {
+  detection: SarDetection;
+  onClose: () => void;
+}) {
+  const passTime = detection.acq_time.slice(0, 16).replace("T", " ");
+  return (
+    <div className="detail">
+      <button className="close" onClick={onClose} aria-label="Close">
+        ×
+      </button>
+      <h2>Detection in a satellite image</h2>
+      <p className="subtitle">
+        <span className="ring" style={{ borderColor: RADAR_COLOUR }} />
+        Likely a vessel: found by the deep-learning model in a Sentinel-1 radar image
+      </p>
+
+      <div className="age-badge">Radar pass {formatAge(detection.age_hours * 3600)}</div>
+
+      <SarChip
+        key={detection.id}
+        image={detection.chip}
+        imageUrl={(pol, attempt) => api.detectionChipUrl(detection, pol, attempt)}
+        centre={detection}
+        ringColour={RADAR_COLOUR}
+        nearest={NO_NEAREST}
+        passTs={detection.acq_time}
+      />
+
+      <dl className="stats stacked">
+        <div>
+          <dt>Position</dt>
+          <dd>
+            {detection.lat.toFixed(4)}°, {detection.lon.toFixed(4)}°
+          </dd>
+        </div>
+        <div>
+          <dt>Model score</dt>
+          <dd>
+            {detection.confidence.toFixed(2)} (kept from {MODEL_THRESHOLD.toFixed(2)}; not a
+            probability)
+          </dd>
+        </div>
+        <div>
+          <dt>Pass</dt>
+          <dd>
+            {detection.satellite} · {passTime} UTC
+          </dd>
+        </div>
+        <div>
+          <dt>Model tested here</dt>
+          <dd>
+            {detection.tested
+              ? "yes (UAE study box): on test passes about 3 in 4 of its detections matched a vessel Global Fishing Watch saw, and it found over 9 in 10 of those"
+              : "no: its false alarms and misses were never measured here"}
+          </dd>
+        </div>
+        {detection.product_name && (
+          <div>
+            <dt>Scene</dt>
+            <dd className="scene-name">{detection.product_name.replace(/_COG\.SAFE$/, "")}</dd>
+          </div>
+        )}
+      </dl>
+
+      <p className="hint">
+        The model says where it sees a vessel, not what it is: it has no class,
+        length or heading output, and at 10 m radar pixels a tanker and a bulk
+        carrier look alike. Whether this object carried AIS is checked only on
+        fused passes (dark-vessel candidates, red and orange).
+      </p>
+      <p className="hint">Contains modified Copernicus Sentinel data.</p>
+    </div>
   );
 }
 
@@ -865,7 +1010,15 @@ function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: ()
 
       <div className="age-badge">Radar pass {formatAge(event.age_hours * 3600)}</div>
 
-      <SarChip key={event.id} event={event} />
+      <SarChip
+        key={event.id}
+        image={evidence.chip.image}
+        imageUrl={(pol, attempt) => api.chipUrl(event.id, pol, evidence.chip, attempt)}
+        centre={evidence.chip}
+        ringColour={DARK_COLOURS[tier]}
+        nearest={evidence.nearest_ais}
+        passTs={event.ts}
+      />
 
       <div className="why-dark">
         <h3>Why dark</h3>

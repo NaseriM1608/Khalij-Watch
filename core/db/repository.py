@@ -539,6 +539,8 @@ class DetectionRepository:
         since: dt.datetime | None = None,
         limit: int = 20_000,
         detector: str = "auto",
+        detector_version: str | None = None,
+        include_fused: bool = False,
     ) -> list[DetectionView]:
         """Detections inside a bounding box, newest pass first.
 
@@ -547,6 +549,9 @@ class DetectionRepository:
         "pointdet" for one detector, "all" for every row, or "auto" (the
         default) for, per pass, the model's rows where the model has rows in
         this box and the pass's other rows where it has none.
+        ``detector_version`` keeps one version only (e.g. the product model's).
+        ``include_fused`` keeps passes with events whatever their age, as their
+        dark-vessel candidates and searched areas are kept.
         """
         if detector not in DETECTOR_CHOICES:
             raise ValueError(f"detector must be one of {DETECTOR_CHOICES}, got {detector!r}")
@@ -556,6 +561,11 @@ class DetectionRepository:
         if since is not None:
             params["since"] = _bind_timestamp(self._session, since)
             since_clause = "AND s.acq_time >= :since"
+            if include_fused:
+                since_clause = (
+                    "AND (s.acq_time >= :since OR d.scene_id IN "
+                    "(SELECT scene_id FROM events WHERE scene_id IS NOT NULL))"
+                )
         detector_clause = ""
         if detector == "auto":
             # Since filters whole passes, the same pass is in or out for both
@@ -570,11 +580,12 @@ class DetectionRepository:
         elif detector != "all":
             params["detector"] = detector
             detector_clause = "AND d.detector = :detector"
+        if detector_version is not None:
+            params["detector_version"] = detector_version
+            detector_clause += " AND d.detector_version = :detector_version"
 
         sql = f"""
-            SELECT d.id, d.scene_id, d.lon, d.lat, d.length_m, d.width_m, d.heading_deg,
-                   d.confidence, d.detector, d.detector_version, d.polarisation,
-                   d.pixel_count, d.peak_dn, s.acq_time, s.satellite, s.product_name
+            SELECT {_DETECTION_COLUMNS}
             FROM detections d
             JOIN sar_scenes s ON s.id = d.scene_id
             WHERE d.id IN ({bbox_filter_sql("detections")})
@@ -586,8 +597,24 @@ class DetectionRepository:
         rows = self._session.execute(text(sql), params).mappings().all()
         return [_to_detection_view(row) for row in rows]
 
+    def get(self, detection_id: int) -> DetectionView | None:
+        """One detection by id, with its pass."""
+        sql = f"""
+            SELECT {_DETECTION_COLUMNS}
+            FROM detections d
+            JOIN sar_scenes s ON s.id = d.scene_id
+            WHERE d.id = :detection_id
+        """
+        row = self._session.execute(text(sql), {"detection_id": detection_id}).mappings().first()
+        return None if row is None else _to_detection_view(row)
+
     def count(self) -> int:
         return self._session.execute(select(func.count()).select_from(Detection)).scalar_one()
+
+
+_DETECTION_COLUMNS = """d.id, d.scene_id, d.lon, d.lat, d.length_m, d.width_m, d.heading_deg,
+                   d.confidence, d.detector, d.detector_version, d.polarisation,
+                   d.pixel_count, d.peak_dn, s.acq_time, s.satellite, s.product_name"""
 
 
 def _detection_row(target: MeasuredTarget, bbox: BBox, shared: dict[str, object]) -> dict:

@@ -30,6 +30,9 @@ STUDY_AREAS: dict[str, tuple[float, float, float]] = {
 # (PLAN §17): run 2, the product model, on VV+VH, and the CFAR baseline on VH
 # at Pfa 1e-6. Run 1 (kaggle-v1) was measured too, lost to CFAR and was
 # superseded, so its searches do not count as tested.
+# The product model: run 2, epoch 5 (models/point_detector_kaggle-v2.onnx).
+PRODUCT_DETECTOR = "pointdet"
+PRODUCT_VERSION = "kaggle-v2"
 TESTED_DETECTORS = frozenset(
     {("pointdet", "kaggle-v2", "DV"), ("cfar", "L4.4-g24-t40-p1e-06-h0.25", "VH")}
 )
