@@ -11,6 +11,7 @@ from __future__ import annotations
 import pytest
 
 from core.areas import (
+    IRAN_AREAS,
     STUDY_AREAS,
     box_around,
     clip_to_box,
@@ -54,6 +55,30 @@ def test_a_box_is_the_requested_size_on_the_ground():
 )
 def test_a_point_is_placed_in_its_study_box_or_none(lon, lat, area):
     assert study_area_of(lon, lat) == area
+
+
+def test_the_iranian_boxes_are_the_consoles_seven_and_none_overlaps_a_study_box():
+    """Held-out boxes for validating the model on the Iranian coast, never study boxes."""
+    assert IRAN_AREAS == {
+        "bandar_abbas": (56.25, 27.03, 20.0),
+        "larak_hormuz": (56.45, 26.85, 20.0),
+        "kish": (53.98, 26.53, 20.0),
+        "assaluyeh": (52.55, 27.40, 20.0),
+        "bushehr": (50.72, 28.95, 20.0),
+        "kharg": (50.30, 29.25, 20.0),
+        "jask": (57.80, 25.60, 20.0),
+    }
+    for lon, lat, size in IRAN_AREAS.values():
+        box = box_around(lon, lat, size)
+        assert study_area_of(lon, lat) is None
+        for study in STUDY_AREAS.values():
+            other = box_around(*study)
+            assert (
+                box.max_lon < other.min_lon
+                or other.max_lon < box.min_lon
+                or box.max_lat < other.min_lat
+                or other.max_lat < box.min_lat
+            )
 
 
 # --------------------------------------------------------------------------

@@ -26,6 +26,19 @@ STUDY_AREAS: dict[str, tuple[float, float, float]] = {
     "ras_al_khaimah": (55.88, 26.02, 20.0),
     "hormuz_lanes": (56.55, 26.50, 40.0),
 }
+# Seven 20 km boxes at anchorages and terminals on the Iranian side, where the
+# console runs the product model (data/logs/run_detect_iran.sh). Not study
+# boxes: the model was never trained, chosen or tested here, so they are a
+# held-out region for scripts/compare_cfar_model.py (--pairs, list_pairs.py).
+IRAN_AREAS: dict[str, tuple[float, float, float]] = {
+    "bandar_abbas": (56.25, 27.03, 20.0),
+    "larak_hormuz": (56.45, 26.85, 20.0),
+    "kish": (53.98, 26.53, 20.0),
+    "assaluyeh": (52.55, 27.40, 20.0),
+    "bushehr": (50.72, 28.95, 20.0),
+    "kharg": (50.30, 29.25, 20.0),
+    "jask": (57.80, 25.60, 20.0),
+}
 # Detector, version and polarisation measured against GFW in the study boxes
 # (PLAN §17): run 2, the product model, on VV+VH, and the CFAR baseline on VH
 # at Pfa 1e-6. Run 1 (kaggle-v1) was measured too, lost to CFAR and was

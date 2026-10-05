@@ -64,6 +64,18 @@ def is_transient(exc: Exception) -> bool:
     return isinstance(exc, APIConnectionError | APITimeoutError)
 
 
+def stops_the_run(exc: Exception) -> bool:
+    """Whether a GFW failure should stop the run rather than skip just this pass.
+
+    Only a 4xx about this pass's own request (e.g. 422) is skipped. A 429
+    means GFW's one-report lock is held, 401/403 fail every pass, and a
+    timeout, a dropped connection or a 5xx (524) may leave a report computing;
+    sending the next pass's report then would only meet the lock.
+    """
+    status = getattr(exc, "status_code", None)
+    return not (status is not None and 400 <= status < 500 and status not in (401, 403, 429))
+
+
 def box_polygon(box: BBox) -> dict:
     """The GeoJSON polygon 4Wings reports take for a box."""
     ring = [

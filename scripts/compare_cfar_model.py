@@ -46,7 +46,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
-from core.areas import STUDY_AREAS  # noqa: E402
+from core.areas import IRAN_AREAS, STUDY_AREAS  # noqa: E402
 from core.inference.runner import check_tiling, run_tiled  # noqa: E402
 from core.labeling.gfw import PASS_MARGIN  # noqa: E402
 
@@ -56,6 +56,9 @@ MODEL_THRESHOLD = 0.45  # chosen on validation (kaggle-v1, epoch 6)
 THRESHOLD_GRID = tuple(round(0.05 * i, 2) for i in range(1, 19))  # 0.05 .. 0.90
 BOOTSTRAP_RESAMPLES = 10_000
 BOOTSTRAP_SEED = 0
+# Longer than GFW's own gateway (about 100 s, then 524), as in scripts/fuse_passes.py:
+# a client timeout first would leave a report computing behind GFW's one-report lock.
+GFW_TIMEOUT_S = 180.0
 # 128 px tiles were chosen for run 1, which trained on 128 px chips; run 2
 # trained on random 96 px crops of them and a tile-size check for it is
 # still pending. Small tiles matter because EfficientNet's squeeze-excitation
@@ -65,7 +68,8 @@ MODEL_TILE = 128
 MODEL_OVERLAP = 32
 DEFAULT_MODEL = Path("models/runs/kaggle-v1/local_best.onnx")
 LABEL_CHARS = set(string.ascii_letters + string.digits + "_-.")
-AREAS = STUDY_AREAS
+# The study boxes, and the Iranian boxes as a held-out region (--pairs only).
+AREAS = {**STUDY_AREAS, **IRAN_AREAS}
 OUT = Path("models/runs/kaggle-v1/compare")
 # Per-pass counts, in this order: true and false positives, GFW detections with
 # and without AIS, hits on each (shared by count in mixed cells), and the
@@ -309,6 +313,7 @@ def compare_scene(area: str, scene_name: str, loaded, gfw_client) -> dict:
 
     ``loaded`` holds (ModelSpec, provenance, onnxruntime session) per model.
     """
+    from core.fusion.presence import failed_before_sending
     from core.inference.contract import normalise_chip
     from core.labeling.gfw import cells_for_pass
     from core.labeling.gfw_api import fetch_sar_cells
@@ -328,7 +333,12 @@ def compare_scene(area: str, scene_name: str, loaded, gfw_client) -> dict:
     )
     started = time.perf_counter()
     # GFW first: when it fails, the pass fails before the image read and every model run.
-    cells = asyncio.run(fetch_sar_cells(gfw_client, box, *gfw_days(product.acq_start)))
+    # Resent only if it never reached GFW: one report at a time per token.
+    cells = asyncio.run(
+        fetch_sar_cells(
+            gfw_client, box, *gfw_days(product.acq_start), transient=failed_before_sending
+        )
+    )
     scene, window, bands = read_pair(product, box)
     masked = exclusion_mask(box, product, scene, window, bands, DEFAULT_BUFFER_M)
     offset = (window.row_off, window.col_off)
@@ -566,7 +576,9 @@ def summarise(
     # A pass with no GFW detection anywhere in the box is one GFW did not cover
     # (no Sentinel-1C data in 2025, offline July-September 2026), not an empty
     # sea: scoring it would turn every detection into a false alarm.
-    excluded = [r["scene"] for r in results if r.get("gfw_in_box", 1) == 0]
+    # In a quiet box a covered pass can be empty too, so what each left-out pass
+    # detected is kept: its detections would all be false alarms if it was covered.
+    left_out = [r for r in results if r.get("gfw_in_box", 1) == 0]
     results = [r for r in results if r.get("gfw_in_box", 1) != 0]
     labels = list(results[0]["models"]) if results else ["model"]
     unknown = set(thresholds or {}) - set(labels)
@@ -594,7 +606,19 @@ def summarise(
             bootstrap[label][rule] = {"threshold": chosen[label], **boot} if boot else {}
     return {
         "scenes": len(results),
-        "excluded_no_gfw": excluded,
+        "excluded_no_gfw": [r["scene"] for r in left_out],
+        "excluded_no_gfw_detections": [
+            {
+                "area": r["area"],
+                "scene": r["scene"],
+                "cfar": len(r["cfar"]),
+                "models": {
+                    label: len(predictions(r, label, chosen.get(label, threshold)))
+                    for label in r["models"]
+                },
+            }
+            for r in left_out
+        ],
         "splits": sorted({r.get("split", "unrecorded") for r in results}),
         "model_threshold": threshold,
         "thresholds": chosen,
@@ -624,8 +648,7 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
     from gfwapiclient.exceptions import GFWAPIClientError
 
     from core.config import load_settings
-    from core.sar.catalogue import CatalogueError
-    from core.sar.reader import S3AccessError
+    from core.labeling.gfw_api import stops_the_run
 
     load_settings()
     loaded = [
@@ -637,7 +660,7 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
         for spec in specs
     ]
     wanted = {spec.label: prov for spec, prov, _ in loaded}
-    client = gfwapiclient.Client(access_token=os.environ["GFW_API_TOKEN"])
+    client = gfwapiclient.Client(access_token=os.environ["GFW_API_TOKEN"], timeout=GFW_TIMEOUT_S)
     args.out.mkdir(parents=True, exist_ok=True)
     if args.pairs:
         pairs, split = read_pairs(args.pairs), args.pairs.stem
@@ -650,17 +673,25 @@ def run_passes(args: argparse.Namespace, specs: list[ModelSpec], thresholds: dic
         todo = todo[: args.limit]
     print(f"{len(todo)} {split} passes to compare with {', '.join(wanted)}", flush=True)
     failed = 0
-    for area, scene_name in todo:
+    for done, (area, scene_name) in enumerate(todo):
         try:
             result = compare_scene(area, scene_name, loaded, client)
-        except (
-            S3AccessError,
-            CatalogueError,
-            GFWAPIClientError,
-            ValueError,
-            StopIteration,
-            OSError,
-        ) as exc:
+        except GFWAPIClientError as exc:
+            if stops_the_run(exc):
+                print(
+                    f"  {area} {scene_name[:40]} GFW {type(exc).__name__}: {str(exc)[:120]}\n"
+                    f"stopped: GFW may still be computing a report (one at a time); "
+                    f"{len(todo) - done} passes not compared; rerun in about 30 min",
+                    flush=True,
+                )
+                break
+            failed += 1
+            print(
+                f"  {area} {scene_name[:40]} FAILED {type(exc).__name__}: {str(exc)[:120]}",
+                flush=True,
+            )
+            continue
+        except Exception as exc:  # one bad pass must not stop the rest; a rerun retries it
             failed += 1
             print(
                 f"  {area} {scene_name[:40]} FAILED {type(exc).__name__}: {str(exc)[:120]}",

@@ -400,7 +400,9 @@ def test_summarise_counts_a_model_score_exactly_at_the_threshold(tmp_path):
 
 
 class GfwError(Exception):
-    pass
+    def __init__(self, message: str, status_code: int | None = None):
+        super().__init__(message)
+        self.status_code = status_code
 
 
 @pytest.fixture
@@ -430,7 +432,8 @@ def offline_main(tmp_path, monkeypatch):
         models=models,
         compared=[],
         fail=set(),
-        error=GfwError("GFW said no"),
+        error=GfwError("unprocessable request", status_code=422),
+        clients=[],
     )
     state.out.mkdir()
 
@@ -451,7 +454,11 @@ def offline_main(tmp_path, monkeypatch):
         }
 
     monkeypatch.setattr(compare, "compare_scene", fake_compare_scene)
-    monkeypatch.setitem(sys.modules, "gfwapiclient", SimpleNamespace(Client=lambda **_: "client"))
+    monkeypatch.setitem(
+        sys.modules,
+        "gfwapiclient",
+        SimpleNamespace(Client=lambda **kwargs: state.clients.append(kwargs) or "client"),
+    )
     monkeypatch.setitem(
         sys.modules, "gfwapiclient.exceptions", SimpleNamespace(GFWAPIClientError=GfwError)
     )
@@ -502,7 +509,7 @@ def test_main_resumes_only_passes_compared_with_the_same_models(offline_main):
     assert [scene for scene, _ in m.compared] == m.scenes
 
 
-def test_main_treats_a_gfw_error_as_one_failed_pass(offline_main, capsys):
+def test_main_treats_a_gfw_error_about_one_request_as_one_failed_pass(offline_main, capsys):
     m = offline_main
     m.fail.add(m.scenes[0])
 
@@ -510,6 +517,43 @@ def test_main_treats_a_gfw_error_as_one_failed_pass(offline_main, capsys):
 
     assert [scene for scene, _ in m.compared] == [m.scenes[1]]
     assert "1 passes failed" in capsys.readouterr().out
+
+
+@pytest.mark.parametrize("status", [429, 524, None])
+def test_main_stops_at_a_gfw_lock_or_timeout_instead_of_sending_the_next_report(
+    offline_main, capsys, status
+):
+    """GFW computes one report at a time; after a 429, a 5xx or a timeout the next would meet the lock."""
+    m = offline_main
+    m.fail.add(m.scenes[0])
+    m.error = GfwError("busy", status_code=status)
+
+    m.run("--model", f"a={m.models['a']}")
+
+    assert m.compared == []
+    assert "stopped" in capsys.readouterr().out
+
+
+def test_main_counts_an_unexpected_error_as_one_failed_pass(offline_main, capsys):
+    """One pass that always fails must not keep every later pass from being compared."""
+    m = offline_main
+    m.fail.add(m.scenes[0])
+    m.error = KeyError("lat")
+
+    assert m.run("--model", f"a={m.models['a']}") == 0
+
+    assert [scene for scene, _ in m.compared] == [m.scenes[1]]
+    out = capsys.readouterr().out
+    assert "KeyError" in out
+    assert "1 passes failed" in out
+
+
+def test_main_gives_a_gfw_report_longer_than_gfws_own_gateway_timeout(offline_main):
+    m = offline_main
+
+    m.run("--model", f"a={m.models['a']}")
+
+    assert m.clients == [{"access_token": "not-a-token", "timeout": 180.0}]
 
 
 def test_main_treats_a_catalogue_outage_as_one_failed_pass(offline_main, capsys):
@@ -584,6 +628,16 @@ def test_read_pairs_refuses_an_unknown_area(tmp_path):
         compare.read_pairs(pairs)
 
 
+def test_read_pairs_accepts_the_iranian_validation_boxes(tmp_path):
+    from core.areas import IRAN_AREAS, STUDY_AREAS
+
+    pairs = tmp_path / "iran.txt"
+    pairs.write_text("bandar_abbas S1A_X.SAFE\njask S1A_Y.SAFE  # open sea\n", encoding="utf-8")
+
+    assert compare.read_pairs(pairs) == [("bandar_abbas", "S1A_X.SAFE"), ("jask", "S1A_Y.SAFE")]
+    assert compare.AREAS == {**STUDY_AREAS, **IRAN_AREAS}
+
+
 def test_summarise_leaves_out_passes_gfw_did_not_cover(tmp_path):
     refs = [[56.50, 25.20, 1, True]]
     write_result(tmp_path, "s1", models={"a": ("x", 128, [])}, refs=refs, cfar=[[56.50, 25.20]])
@@ -597,6 +651,23 @@ def test_summarise_leaves_out_passes_gfw_did_not_cover(tmp_path):
 
     assert summary["scenes"] == 1
     assert summary["excluded_no_gfw"] == ["s2"]
+
+
+def test_summarise_records_what_each_left_out_pass_detected(tmp_path):
+    """In a quiet box a pass GFW covered can be empty: its detections are then all false alarms."""
+    peaks = [[56.60, 25.30, 0.9], [56.61, 25.31, 0.1]]
+    write_result(tmp_path, "s1", models={"a": ("x", 128, [])}, refs=[[56.50, 25.20, 1, True]])
+    write_result(
+        tmp_path, "s2", models={"a": ("x", 128, peaks)}, refs=[], cfar=[[56.60, 25.30]], area="jask"
+    )
+    path = tmp_path / "jask__s2.json"
+    path.write_text(json.dumps({**json.loads(path.read_text()), "gfw_in_box": 0}), encoding="utf-8")
+
+    summary = summarise(tmp_path)
+
+    assert summary["excluded_no_gfw_detections"] == [
+        {"area": "jask", "scene": "s2", "cfar": 1, "models": {"a": 1}}
+    ]
     assert summary["table"]["same_cell"]["all"]["cfar"]["fp"] == 0
 
 

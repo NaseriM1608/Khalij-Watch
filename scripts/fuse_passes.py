@@ -58,6 +58,7 @@ from core.fusion.prefilter import SarDetection, prefilter  # noqa: E402
 from core.fusion.presence import PresenceFix, fetch_presence, hourly_tracks  # noqa: E402
 from core.fusion.rate import BOOTSTRAP_RESAMPLES, dark_rate  # noqa: E402
 from core.labeling.gfw import _floor_hour  # noqa: E402
+from core.labeling.gfw_api import stops_the_run  # noqa: E402
 from core.sar.coastline import LandPolygon  # noqa: E402
 from core.sar.infrastructure import InfrastructureMask  # noqa: E402
 
@@ -310,18 +311,6 @@ def choose_margin(records: Sequence[dict], *, margins: Sequence[float]) -> float
         raise ValueError("no margin has GFW-matched and unmatched detections to agree with")
     best = max(score for score, _ in scored)
     return next(m for score, m in scored if score == best)
-
-
-def stops_the_run(exc: Exception) -> bool:
-    """Whether a GFW failure should stop the run rather than skip just this pass.
-
-    Only a 4xx about this pass's own request (e.g. 422) is skipped. A 429
-    means GFW's one-report lock is held, 401/403 fail every pass, and a
-    timeout, a dropped connection or a 5xx (524) may leave a report computing;
-    sending the next pass's report then would only meet the lock.
-    """
-    status = getattr(exc, "status_code", None)
-    return not (status is not None and 400 <= status < 500 and status not in (401, 403, 429))
 
 
 # ---------------------------------------------------------------------------
