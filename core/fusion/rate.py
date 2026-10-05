@@ -48,6 +48,13 @@ def dark_rate(
     total_dark, total_kept = int(d.sum()), int(k.sum())
     if total_kept == 0:
         return RateEstimate(None, None, None, total_dark, total_kept, len(k))
+    # With no dark detection (or only dark ones) every resample gives the same
+    # rate, so report the exact one-sided 97.5% Clopper-Pearson bound instead
+    # of a zero-width interval.
+    if total_dark == 0:
+        return RateEstimate(0.0, 0.0, 1.0 - 0.025 ** (1 / total_kept), 0, total_kept, len(k))
+    if total_dark == total_kept:
+        return RateEstimate(1.0, 0.025 ** (1 / total_kept), 1.0, total_dark, total_kept, len(k))
     draws = np.random.default_rng(seed).integers(0, len(k), size=(resamples, len(k)))
     boot_kept = k[draws].sum(axis=1)
     usable = boot_kept > 0  # a resample of passes that kept nothing has no rate

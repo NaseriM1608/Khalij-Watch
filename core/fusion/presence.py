@@ -26,7 +26,7 @@ from typing import Any
 from core.db.spatial import BBox
 from core.fusion.geometry import local_distance_m
 from core.labeling.gfw import _as_int, _floor_hour, _parse_hour
-from core.labeling.gfw_api import box_polygon, is_transient, with_retries
+from core.labeling.gfw_api import box_polygon, with_retries
 
 # H-1, H and H+1 around the pass hour H.
 WINDOW_HOURS = 3
@@ -187,6 +187,19 @@ def hourly_tracks(fixes: Iterable[PresenceFix], acquired: dt.datetime) -> list[H
     ]
 
 
+def failed_before_sending(exc: Exception) -> bool:
+    """Whether a client error happened before the report reached GFW, so it is safe to send again.
+
+    gfwapiclient wraps every send failure (``raise ... from`` the httpx error).
+    After the request has left - a read timeout, a dropped response - GFW may
+    still be computing the report, and sending it again would only meet the
+    one-report lock (HTTP 429).
+    """
+    import httpx
+
+    return isinstance(exc.__cause__, httpx.ConnectError | httpx.ConnectTimeout | httpx.PoolTimeout)
+
+
 async def fetch_presence(
     client: Any,
     box: BBox,
@@ -210,5 +223,7 @@ async def fetch_presence(
         end_date=_GfwHour.of(end),
         geojson=box_polygon(box),
     )
-    result = await with_retries(request, is_transient=transient or is_transient, sleep=sleep)
+    result = await with_retries(
+        request, is_transient=transient or failed_before_sending, sleep=sleep
+    )
     return parse_presence_rows(row.model_dump() for row in result.data())

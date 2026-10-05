@@ -46,7 +46,14 @@ from core.db.spatial import BBox  # noqa: E402
 from core.fusion.assign import DARK, MATCHED, assign  # noqa: E402
 from core.fusion.gate import candidates  # noqa: E402
 from core.fusion.geometry import buffer_box  # noqa: E402
-from core.fusion.guards import gfw_flag_for, is_gfw_artefact, is_presence_gap  # noqa: E402
+from core.fusion.guards import (  # noqa: E402
+    artefact_by_counts,
+    expected_ais,
+    gap_is_judgeable,
+    gfw_flag_for,
+    is_gfw_artefact,
+    is_presence_gap,
+)
 from core.fusion.prefilter import SarDetection, prefilter  # noqa: E402
 from core.fusion.presence import PresenceFix, fetch_presence, hourly_tracks  # noqa: E402
 from core.fusion.rate import BOOTSTRAP_RESAMPLES, dark_rate  # noqa: E402
@@ -71,6 +78,15 @@ INFRASTRUCTURE_RADIUS_M = 300.0
 # 2026-09-29). Per-sub-swath values need the annotation XML, which is not cached
 # for stored passes: a bound, recorded as a shortcut in the handoff.
 R_OVER_V_BOUND_S = 118.0
+# Land is loaded this far around a box, so shore distances on evidence cards
+# are exact up to here (the pre-filter's 1 km cut needs far less).
+LAND_REACH_M = 20_000.0
+# A report rarely takes over a minute; 4Wings itself gives up at about 100 s (524).
+GFW_TIMEOUT_S = 180.0
+# Bumped whenever the logic behind a record changes, so the summary never pools
+# records made by different code. Records written before this field existed
+# (the batch started 2026-10-05 01:26 UTC, commit 7b62bc7) used logic 1.
+FUSION_VERSION = "1"
 
 REGIONS = {
     "sharjah_dubai": "inner_gulf",
@@ -144,7 +160,10 @@ def fuse_pass(
     hour = _floor_hour(acquired)
     pass_hour_vessels = len({f.vessel_id for f in fixes if f.hour == hour})
     box_vessels = len({f.vessel_id for f in fixes if f.hour == hour and box.contains(f.lon, f.lat)})
+    gfw_refs = sum(int(r[2]) for r in result["refs"])
     gfw_matched = sum(int(r[2]) for r in result["refs"] if r[3])
+    artefact = is_gfw_artefact(result["refs"], box_vessels=box_vessels)
+    expected = expected_ais(refs_total=gfw_refs, matched=gfw_matched, artefact=artefact)
     flags = [gfw_flag_for(d.lon, d.lat, result["refs"]) for d in kept]
     per_margin = {}
     for margin in margins:
@@ -165,10 +184,11 @@ def fuse_pass(
         "pass_hour_vessels": pass_hour_vessels,
         "box_vessels": box_vessels,
         "presence_datasets": sorted({f.report_dataset for f in fixes if f.report_dataset}),
-        "gfw_refs": sum(int(r[2]) for r in result["refs"]),
+        "gfw_refs": gfw_refs,
         "gfw_matched": gfw_matched,
-        "gfw_artefact": is_gfw_artefact(result["refs"], pass_hour_vessels=pass_hour_vessels),
-        "presence_gap": is_presence_gap(box_vessels=box_vessels, gfw_matched=gfw_matched),
+        # Informational: the summary recomputes both flags from the counts above.
+        "gfw_artefact": artefact,
+        "presence_gap": is_presence_gap(box_vessels=box_vessels, gfw_matched=expected),
         "per_margin": per_margin,
     }
 
@@ -198,6 +218,40 @@ def balanced_accuracy(table: dict) -> float | None:
     return (table["dark_gfw_unmatched"] / unmatched + table["ais_gfw_matched"] / matched) / 2
 
 
+def acquisition_key(record: dict, index: int) -> str:
+    """The overpass of a record (satellite + datatake id): boxes of one acquisition share its AIS feed."""
+    parts = Path(str(record.get("scene") or "")).stem.split("_")
+    return f"{parts[0]}_{parts[7]}" if len(parts) >= 8 else f"record-{index}"
+
+
+def with_flags(records: Sequence[dict]) -> list[dict]:
+    """Records with GFW-artefact and presence-gap flags recomputed from their stored counts.
+
+    A presence gap belongs to the acquisition's AIS feed, not to one box, so a
+    gap evident in any box of an acquisition flags all its boxes. "guarded"
+    says whether the gap rule could be judged on the record itself.
+    """
+    flagged = []
+    for i, r in enumerate(records):
+        artefact = artefact_by_counts(
+            refs_total=r["gfw_refs"], matched=r["gfw_matched"], box_vessels=r["box_vessels"]
+        )
+        expected = expected_ais(
+            refs_total=r["gfw_refs"], matched=r["gfw_matched"], artefact=artefact
+        )
+        flagged.append(
+            {
+                **r,
+                "acquisition": acquisition_key(r, i),
+                "gfw_artefact": artefact,
+                "presence_gap": is_presence_gap(box_vessels=r["box_vessels"], gfw_matched=expected),
+                "guarded": gap_is_judgeable(expected),
+            }
+        )
+    gapped = {r["acquisition"] for r in flagged if r["presence_gap"]}
+    return [{**r, "presence_gap": r["acquisition"] in gapped} for r in flagged]
+
+
 def _agreement(records: Sequence[dict], key: str) -> dict:
     usable = [r for r in records if not r["gfw_artefact"]]
     table = {k: sum(r["per_margin"][key][k] for r in usable) for k in TABLE_KEYS}
@@ -205,16 +259,18 @@ def _agreement(records: Sequence[dict], key: str) -> dict:
 
 
 def _rates(records: Sequence[dict], margins: Sequence[float], resamples: int) -> dict:
-    return {
-        margin_key(m): asdict(
-            dark_rate(
-                [r["per_margin"][margin_key(m)]["dark"] for r in records],
-                [r["kept"] for r in records],
-                resamples=resamples,
-            )
-        )
-        for m in margins
-    }
+    """Pooled dark rates per margin, resampling whole acquisitions (the boxes of one overpass together)."""
+    acquisitions = sorted({r["acquisition"] for r in records})
+    kept = [sum(r["kept"] for r in records if r["acquisition"] == a) for a in acquisitions]
+    rates = {}
+    for m in margins:
+        key = margin_key(m)
+        dark = [
+            sum(r["per_margin"][key]["dark"] for r in records if r["acquisition"] == a)
+            for a in acquisitions
+        ]
+        rates[key] = asdict(dark_rate(dark, kept, resamples=resamples))
+    return rates
 
 
 def summarise(
@@ -222,36 +278,50 @@ def summarise(
 ) -> dict:
     """Dark rates with intervals per margin, overall and by region and period; agreement with GFW.
 
-    Passes with a presence gap are left out of both and counted.
+    Passes with a presence gap (anywhere in their acquisition) are left out of
+    both and counted, and so, separately, are kept passes whose gap could not
+    be judged.
     """
-    gaps = sum(bool(r.get("presence_gap")) for r in records)
-    records = [r for r in records if not r.get("presence_gap")]
+    flagged = with_flags(records)
+    usable = [r for r in flagged if not r["presence_gap"]]
 
     def by(field: str) -> dict:
-        groups = sorted({r[field] for r in records})
-        return {
-            g: _rates([r for r in records if r[field] == g], margins, resamples) for g in groups
-        }
+        groups = sorted({r[field] for r in usable})
+        return {g: _rates([r for r in usable if r[field] == g], margins, resamples) for g in groups}
 
     return {
-        "passes": len(records),
-        "presence_gap_passes": gaps,
-        "all": _rates(records, margins, resamples),
+        "area_passes": len(usable),
+        "presence_gap_passes": len(flagged) - len(usable),
+        "unguarded_passes": sum(not r["guarded"] for r in usable),
+        "gfw_artefact_passes": sum(r["gfw_artefact"] for r in usable),
+        "all": _rates(usable, margins, resamples),
         "by_region": by("region"),
         "by_period": by("period"),
-        "gfw_agreement": {margin_key(m): _agreement(records, margin_key(m)) for m in margins},
+        "gfw_agreement": {margin_key(m): _agreement(usable, margin_key(m)) for m in margins},
     }
 
 
 def choose_margin(records: Sequence[dict], *, margins: Sequence[float]) -> float:
     """The margin with the highest balanced agreement with GFW's matched flag (ties: the smaller)."""
-    records = [r for r in records if not r.get("presence_gap")]
-    scored = [(balanced_accuracy(_agreement(records, margin_key(m))), m) for m in sorted(margins)]
+    usable = [r for r in with_flags(records) if not r["presence_gap"]]
+    scored = [(balanced_accuracy(_agreement(usable, margin_key(m))), m) for m in sorted(margins)]
     scored = [(score, m) for score, m in scored if score is not None]
     if not scored:
         raise ValueError("no margin has GFW-matched and unmatched detections to agree with")
     best = max(score for score, _ in scored)
     return next(m for score, m in scored if score == best)
+
+
+def stops_the_run(exc: Exception) -> bool:
+    """Whether a GFW failure should stop the run rather than skip just this pass.
+
+    Only a 4xx about this pass's own request (e.g. 422) is skipped. A 429
+    means GFW's one-report lock is held, 401/403 fail every pass, and a
+    timeout, a dropped connection or a 5xx (524) may leave a report computing;
+    sending the next pass's report then would only meet the lock.
+    """
+    status = getattr(exc, "status_code", None)
+    return not (status is not None and 400 <= status < 500 and status not in (401, 403, 429))
 
 
 # ---------------------------------------------------------------------------
@@ -283,17 +353,19 @@ async def _fetch(token: str, box: BBox, acquired: dt.datetime) -> list[PresenceF
     import gfwapiclient
 
     # One client per pass: a client reused across asyncio.run loops can trip on closed connections.
-    client = gfwapiclient.Client(access_token=token)
+    client = gfwapiclient.Client(access_token=token, timeout=GFW_TIMEOUT_S)
     return await fetch_presence(client, box, acquired)
 
 
 def presence_for(out: Path, result: dict, box: BBox, token: str) -> list[PresenceFix]:
     """The pass's presence, from the cache or fetched (one 4Wings report) and cached."""
     path = presence_path(out, result["area"], result["scene"])
-    if path.is_file():
+    query = buffer_box(box, PRESENCE_BUFFER_M)
+    if path.is_file() and json.loads(path.read_text(encoding="utf-8"))["query_box"] == asdict(
+        query
+    ):
         return load_presence(path)
     acquired = dt.datetime.fromisoformat(result["acquired"])
-    query = buffer_box(box, PRESENCE_BUFFER_M)
     fixes = asyncio.run(_fetch(token, query, acquired))
     write_json(
         path,
@@ -329,6 +401,7 @@ def run_passes(args: argparse.Namespace) -> int:
         "infrastructure_radius_m": INFRASTRUCTURE_RADIUS_M,
         "r_over_v_s": args.r_over_v,
         "product": f"{PRODUCT_SHA256}@{PRODUCT_TILE}/{PRODUCT_OVERLAP} thr {PRODUCT_THRESHOLD}",
+        "fusion_version": FUSION_VERSION,
     }
     land, platforms, failed, done = {}, {}, 0, 0
     for folder in args.results:
@@ -342,7 +415,7 @@ def run_passes(args: argparse.Namespace) -> int:
             area = result["area"]
             box = box_around(*AREAS[area])
             if area not in land:
-                land[area] = load_land(bbox=buffer_box(box, args.shore_m + 1_000.0))
+                land[area] = load_land(bbox=buffer_box(box, LAND_REACH_M))
                 platforms[area] = load_platforms(
                     bbox=buffer_box(box, INFRASTRUCTURE_RADIUS_M + 500.0)
                 )
@@ -355,6 +428,11 @@ def run_passes(args: argparse.Namespace) -> int:
                     f"  {area} {result['scene'][:40]} FAILED {type(exc).__name__}: {str(exc)[:120]}",
                     flush=True,
                 )
+                if stops_the_run(exc):
+                    print(
+                        f"{done} passes fused; stopping: GFW may be busy, rerun later", flush=True
+                    )
+                    return 1
                 continue
             record = fuse_pass(
                 result,
@@ -390,6 +468,9 @@ def write_summary(args: argparse.Namespace) -> int:
         records = [json.loads(p.read_text(encoding="utf-8")) for p in sorted(folder.glob("*.json"))]
         if records:
             sets[folder.name] = records
+    for records in sets.values():
+        for r in records:  # records from before the field existed ran fusion logic 1
+            r["params"].setdefault("fusion_version", "1")
     params = {json.dumps(r["params"], sort_keys=True) for records in sets.values() for r in records}
     if len(params) != 1:
         print(
@@ -401,6 +482,12 @@ def write_summary(args: argparse.Namespace) -> int:
     if args.validation not in sets:
         print(f"no validation records in {args.out / args.validation}", flush=True)
         return 1
+    for name, records in sets.items():
+        sources = len(list(Path(records[0]["source"]).parent.glob("*__*.json")))
+        if len(records) < sources:
+            print(
+                f"WARNING: {name} holds {len(records)} of {sources} passes; the batch is incomplete"
+            )
     chosen = choose_margin(sets[args.validation], margins=margins)
     summary = {
         "operating_margin_m": chosen,
@@ -416,7 +503,8 @@ def write_summary(args: argparse.Namespace) -> int:
     for name, s in summary["sets"].items():
         rate, agreement = s["all"][key], s["gfw_agreement"][key]
         print(
-            f"  {name:22s} passes {s['passes']:3d} dark {rate['dark']}/{rate['kept']} = {rate['rate']} "
+            f"  {name:22s} area-passes {s['area_passes']:3d} (gap {s['presence_gap_passes']}, "
+            f"unguarded {s['unguarded_passes']}) dark {rate['dark']}/{rate['kept']} = {rate['rate']} "
             f"[{rate['low']}, {rate['high']}]  GFW balanced accuracy {agreement['balanced_accuracy']}",
             flush=True,
         )

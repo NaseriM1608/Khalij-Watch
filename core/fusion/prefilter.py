@@ -4,16 +4,19 @@ A detection counts only if it is one vessel in open, imaged water (PLAN §17,
 2026-10-04 "Phase 6 feasibility", "An honest dark rate"):
 
 - duplicates are merged first: the product model leaves 2.8% of peaks within
-  100 m of another (tile seams), and CFAR splits large moving ships into
-  fragments about 170 m apart (PLAN §17, 2026-09-27);
+  100 m of another (tile seams). The 100 m radius does not merge CFAR
+  fragments of one large ship, which lie about 170 m apart (PLAN §17,
+  2026-09-27); the dark rate uses the model's detections;
 - detections within ``shore_m`` of land (GFW's dark-vessel convention is
   1 km), on fixed infrastructure (the time-aware OPD mask, applied for the pass
   date by the caller), or within ``edge_m`` of the processed box are set aside
-  with a reason, never silently dropped.
+  with a reason, never silently dropped. Shore distances are exact only within
+  the land the caller loaded around the box.
 
-Not yet here: azimuth ghosts. They need the per-sub-swath offset from the
-annotation XML, which is not cached for stored passes, and none were seen at
-10 m on S1A (PLAN §17, 2026-09-29).
+Not yet here: azimuth ghosts, which need the per-sub-swath offset from the
+annotation XML (not cached for stored passes; none were seen at 10 m on S1A,
+PLAN §17, 2026-09-29), and the scene footprint's no-data edge, which the
+comparison results do not store (only exact-zero pixels were masked upstream).
 """
 
 from __future__ import annotations

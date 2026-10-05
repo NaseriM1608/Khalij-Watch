@@ -57,3 +57,15 @@ def test_inconsistent_counts_are_rejected():
         dark_rate(dark=[3], kept=[2])
     with pytest.raises(ValueError, match="negative"):
         dark_rate(dark=[-1], kept=[2])
+
+
+def test_no_dark_detection_gives_an_exact_upper_bound_not_a_zero_width_interval():
+    estimate = dark_rate(dark=[0, 0, 0], kept=[100, 200, 100], resamples=100)
+    assert estimate.rate == 0.0 and estimate.low == 0.0
+    assert estimate.high == pytest.approx(1 - 0.025 ** (1 / 400))  # one-sided 97.5% Clopper-Pearson
+
+
+def test_all_dark_gives_an_exact_lower_bound():
+    estimate = dark_rate(dark=[5, 5], kept=[5, 5], resamples=100)
+    assert estimate.high == 1.0
+    assert estimate.low == pytest.approx(0.025 ** (1 / 10))

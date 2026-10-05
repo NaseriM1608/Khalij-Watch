@@ -249,3 +249,20 @@ def test_tracks_know_the_pass_hour_and_its_fraction():
     (track,) = hourly_tracks([fix(hour=14)], PASS)
     assert track.pass_hour == dt.datetime(2026, 9, 25, 14, tzinfo=dt.UTC)
     assert track.pass_fraction == pytest.approx((15 * 60 + 51) / 3600)
+
+
+def test_only_failures_before_the_request_left_are_safe_to_resend():
+    import httpx
+
+    from core.fusion.presence import failed_before_sending
+
+    def wrapped(cause):
+        exc = RuntimeError("APIConnectionError")
+        exc.__cause__ = cause
+        return exc
+
+    request = httpx.Request("POST", "https://example.invalid")
+    assert failed_before_sending(wrapped(httpx.ConnectError("down", request=request)))
+    assert failed_before_sending(wrapped(httpx.ConnectTimeout("slow", request=request)))
+    assert not failed_before_sending(wrapped(httpx.ReadTimeout("computing", request=request)))
+    assert not failed_before_sending(RuntimeError("no cause"))

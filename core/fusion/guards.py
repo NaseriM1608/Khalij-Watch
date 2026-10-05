@@ -14,7 +14,7 @@ from collections.abc import Sequence
 from core.labeling.gfw import _cell_key
 
 # A pass where GFW matched none of at least this many detections while at least
-# this many AIS vessels were present in the pass hour is a GFW matching artefact
+# this many AIS vessels were in the box in the pass hour is a GFW matching artefact
 # (the ~02:07 UTC orbit over Fujairah/Khor Fakkan since 2025-10-02, PLAN §17).
 ARTEFACT_MIN_REFS = 10
 ARTEFACT_MIN_VESSELS = 20
@@ -35,15 +35,31 @@ def gfw_flag_for(lon: float, lat: float, refs: Sequence[Sequence]) -> bool | Non
     return flags.pop() if len(flags) == 1 else None
 
 
-def is_gfw_artefact(refs: Sequence[Sequence], *, pass_hour_vessels: int) -> bool:
-    """GFW matched none of many detections although many AIS vessels were present."""
+def is_gfw_artefact(refs: Sequence[Sequence], *, box_vessels: int) -> bool:
+    """GFW matched none of many detections although many AIS vessels were in the box."""
     total = sum(int(r[2]) for r in refs)
     matched = sum(int(r[2]) for r in refs if r[3])
-    return total >= ARTEFACT_MIN_REFS and matched == 0 and pass_hour_vessels >= ARTEFACT_MIN_VESSELS
+    return artefact_by_counts(refs_total=total, matched=matched, box_vessels=box_vessels)
+
+
+def artefact_by_counts(*, refs_total: int, matched: int, box_vessels: int) -> bool:
+    return refs_total >= ARTEFACT_MIN_REFS and matched == 0 and box_vessels >= ARTEFACT_MIN_VESSELS
+
+
+def expected_ais(*, refs_total: int, matched: int, artefact: bool) -> int:
+    """GFW detections that should carry AIS: the matched ones, or all of them when matching failed."""
+    return refs_total if artefact else matched
+
+
+def gap_is_judgeable(expected: int) -> bool:
+    """Whether a pass has enough GFW detections expected to carry AIS to judge its presence."""
+    return expected >= PRESENCE_GAP_MIN_MATCHED
 
 
 def is_presence_gap(*, box_vessels: int, gfw_matched: int) -> bool:
-    """Presence in the box holds far fewer vessels than GFW matched to AIS there."""
-    return (
-        gfw_matched >= PRESENCE_GAP_MIN_MATCHED and box_vessels < PRESENCE_GAP_RATIO * gfw_matched
-    )
+    """Presence in the box holds far fewer vessels than GFW detections expected to carry AIS.
+
+    ``gfw_matched`` is that expected count: GFW's matched detections, or all
+    of them on a pass where GFW's matching failed (``expected_ais``).
+    """
+    return gap_is_judgeable(gfw_matched) and box_vessels < PRESENCE_GAP_RATIO * gfw_matched

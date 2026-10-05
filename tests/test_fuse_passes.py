@@ -25,6 +25,7 @@ from scripts.fuse_passes import (
     is_presence_gap,
     period_of,
     product_detections,
+    stops_the_run,
     summarise,
 )
 
@@ -107,14 +108,10 @@ def test_gfw_flag_is_the_matched_flag_of_gfw_detections_in_the_same_cell():
 
 def test_a_pass_where_gfw_matched_nothing_amid_many_ais_vessels_is_an_artefact():
     refs = [(56.50, 25.20, 12, False)]
-    assert is_gfw_artefact(refs, pass_hour_vessels=150)
-    assert not is_gfw_artefact(refs, pass_hour_vessels=3)  # a quiet sea: unmatched is plausible
-    assert not is_gfw_artefact(
-        [(56.50, 25.20, 12, False), (56.51, 25.2, 1, True)], pass_hour_vessels=150
-    )
-    assert not is_gfw_artefact(
-        [(56.50, 25.20, 2, False)], pass_hour_vessels=150
-    )  # too few to judge
+    assert is_gfw_artefact(refs, box_vessels=150)
+    assert not is_gfw_artefact(refs, box_vessels=3)  # a quiet sea: unmatched is plausible
+    assert not is_gfw_artefact([(56.50, 25.20, 12, False), (56.51, 25.2, 1, True)], box_vessels=150)
+    assert not is_gfw_artefact([(56.50, 25.20, 2, False)], box_vessels=150)  # too few to judge
 
 
 def test_a_pass_whose_presence_misses_most_of_gfws_matched_ships_has_a_presence_gap():
@@ -199,14 +196,25 @@ def rec(
     artefact=False,
     gap=False,
     table=(0, 0, 0, 0),
+    scene=None,
+    refs=20,
+    matched=None,
+    box_vessels=None,
 ):
+    """A pass record described by the stored counts the summary derives its flags from."""
     dgm, dgu, agm, agu = table
+    if matched is None:
+        matched = 0 if artefact else refs
+    if box_vessels is None:
+        box_vessels = 0 if gap else 50
     return {
+        "scene": scene,
         "region": region,
         "period": period,
         "kept": kept,
-        "gfw_artefact": artefact,
-        "presence_gap": gap,
+        "gfw_refs": refs,
+        "gfw_matched": matched,
+        "box_vessels": box_vessels,
         "per_margin": {
             "0": {
                 "dark": dark,
@@ -272,3 +280,84 @@ def test_a_pass_record_keeps_the_presence_dataset_versions_served():
     ]
     record = fuse(result(peaks=[]), fixes)
     assert record["presence_datasets"] == ["public-global-presence:v4.0"]
+
+
+# ---------------------------------------------------------------------------
+# Review fixes (2026-10-05): flags from counts, per acquisition; resampling
+# acquisitions; which GFW errors stop the run
+# ---------------------------------------------------------------------------
+
+FUJ = "S1C_IW_GRDH_1SDV_20260909T021440_20260909T021505_009364_012A07_08A2_COG.SAFE"
+RAK = (
+    "S1C_IW_GRDH_1SDV_20260909T021415_20260909T021440_009364_012A07_1F2C_COG.SAFE"  # same datatake
+)
+OTHER = "S1D_IW_GRDH_1SDV_20260910T020640_20260910T020705_004509_00860C_1202_COG.SAFE"
+
+
+def test_a_presence_gap_found_in_one_box_covers_every_box_of_that_acquisition():
+    records = [
+        rec(9, 10, scene=FUJ, refs=64, box_vessels=8),  # gap evident here
+        rec(
+            5, 10, scene=RAK, refs=7, box_vessels=1, region="inner_gulf"
+        ),  # too few GFW to judge alone
+        rec(1, 10, scene=OTHER),
+    ]
+    summary = summarise(records, margins=(0.0,), resamples=10)
+    assert summary["presence_gap_passes"] == 2
+    assert summary["all"]["0"]["rate"] == pytest.approx(0.1)
+
+
+def test_an_artefact_pass_is_judged_for_a_gap_against_all_gfw_detections():
+    # GFW matched none of 60 by fault (25 AIS vessels in the box show it is an
+    # artefact), but 25 is under half of the 60 ships that should carry AIS: a gap.
+    gapped = rec(8, 10, scene=OTHER, refs=60, artefact=True, box_vessels=25)
+    summary = summarise([gapped, rec(1, 10, scene=FUJ)], margins=(0.0,), resamples=10)
+    assert summary["presence_gap_passes"] == 1
+
+
+def test_no_matches_amid_few_ais_vessels_cannot_be_judged_and_is_counted_unguarded():
+    # 40 GFW detections, none matched, 5 presence vessels: an artefact with a gap,
+    # or 35 dark ships - the counts cannot tell, so the pass stays in, unguarded.
+    unclear = rec(8, 10, scene=OTHER, refs=40, matched=0, box_vessels=5)
+    summary = summarise([unclear, rec(1, 10, scene=FUJ)], margins=(0.0,), resamples=10)
+    assert (summary["presence_gap_passes"], summary["unguarded_passes"]) == (0, 1)
+
+
+def test_passes_the_gap_guard_cannot_judge_are_counted():
+    summary = summarise(
+        [rec(1, 10, scene=OTHER, refs=3), rec(1, 10, scene=FUJ)], margins=(0.0,), resamples=10
+    )
+    assert summary["unguarded_passes"] == 1
+
+
+def test_boxes_of_one_acquisition_are_resampled_together():
+    summary = summarise(
+        [rec(1, 10, scene=FUJ), rec(3, 10, scene=RAK), rec(0, 10, scene=OTHER)],
+        margins=(0.0,),
+        resamples=50,
+    )
+    assert summary["all"]["0"]["passes"] == 2  # two acquisitions
+    assert summary["area_passes"] == 3
+
+
+class _StatusError(Exception):
+    def __init__(self, status_code):
+        super().__init__(status_code)
+        self.status_code = status_code
+
+
+@pytest.mark.parametrize(
+    ("exc", "stops"),
+    [
+        (_StatusError(422), False),  # this pass's request is wrong: skip it
+        (_StatusError(404), False),
+        (_StatusError(429), True),  # GFW's one-report lock is held
+        (_StatusError(401), True),  # the token is wrong for every pass
+        (_StatusError(403), True),
+        (_StatusError(524), True),  # a report may still be computing
+        (_StatusError(503), True),
+        (TimeoutError("read timed out"), True),
+    ],
+)
+def test_only_per_pass_request_errors_let_the_run_continue(exc, stops):
+    assert stops_the_run(exc) is stops

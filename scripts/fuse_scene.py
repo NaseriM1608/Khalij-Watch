@@ -108,6 +108,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     from scripts.fuse_passes import (
         EDGE_M,
         INFRASTRUCTURE_RADIUS_M,
+        LAND_REACH_M,
         MARGINS_M,
         R_OVER_V_BOUND_S,
         SHORE_M,
@@ -157,7 +158,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         ],
         fixes=fixes,
         refs=refs,
-        land=load_land(bbox=buffer_box(box, SHORE_M + 1_000.0)),
+        land=load_land(bbox=buffer_box(box, LAND_REACH_M)),
         infrastructure=InfrastructureMask(
             load_platforms(bbox=buffer_box(box, INFRASTRUCTURE_RADIUS_M + 500.0)),
             radius_m=INFRASTRUCTURE_RADIUS_M,
