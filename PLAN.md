@@ -2575,3 +2575,85 @@ map or moving to optical imagery.
   its candidates and searched area stayed on the map). The final selection
   fix was checked by type-check and build only (browser pane hidden); the
   card itself was verified in the browser before it.
+
+### 2026-10-05 - The product model on the Iranian coast: a held-out region
+
+The console shows the product model's detections in seven Iranian-side boxes
+(Bandar Abbas, Larak/Hormuz, Kish, Assaluyeh, Bushehr, Kharg, Jask), where it
+was never trained, chosen or tested. The user chose to measure it there
+against GFW, like the Sentinel-1C/1D check: S1A 2024-25 first (the region
+effect alone), then every S1C/S1D pass of 2026-09-08..29 (the satellites the
+console uses now). Nothing was chosen on these passes: run 2, epoch 5, 256/64
+tiles, threshold 0.60, as frozen; CFAR at Pfa 1e-6 as the baseline.
+
+- Passes, by a rule written down before any result (`scripts/list_pairs.py`,
+  headers of `models/runs/kaggle-v2/pairs_iran_*.txt`): passes whose
+  footprint holds the box centre; for S1A, frames of the train and val splits
+  left out, then 12 per box spread in time (83 area-passes; Jask had 11 left);
+  for S1C/S1D every pass (62). The rule leaves out frames, not whole passes:
+  31 of the 83 S1A area-passes are frames of a pass whose UAE frame was in
+  training (Bandar Abbas, Larak and Jask lie next to the UAE boxes). No pixel
+  of an Iranian box was ever trained on.
+- Analysis strata fixed before the results were read (`scripts/compare_strata.py`):
+  GFW reports no detections within about 1 km of land, while the comparison
+  masks only 150 m, and the Iranian boxes have far more coast (land 2-23% of
+  a box against 0-3% in the UAE boxes). So every set is also scored on the
+  0.01 degree cells at least 1 km from land, applied to detections and GFW
+  cells alike; and the S1A passes whose datatake has no train/val frame are
+  scored alone. On the UAE runs the strata reproduce the published tables and
+  the 1 km rule moves F1 by under 0.01.
+- Run: `data/logs/run_compare_iran.sh`, detached, 145 area-passes in about
+  2 h 50 min, none failed. 4 S1A passes (Jask 2, Kish 2) had no GFW detection
+  in the box and are left out as before; they held 11 model and 18 CFAR
+  detections (as false alarms they would lower the model's precision by about
+  0.004). The run first stopped at its second pass: the comparison reused one
+  GFW client across passes, each of which runs its own event loop, so its
+  pooled connection was dead (earlier runs got through on a retry; the
+  request never left, so nothing was sent twice); fixed by a client per pass.
+
+Same-cell rule (neighbour-cell F1 in brackets); GFW detections without AIS
+in parentheses:
+
+| Set | Passes | GFW detections | Scoring | CFAR P / R / F1 | Model P / R / F1 | Model - CFAR, F1 [95%] |
+|---|---|---|---|---|---|---|
+| Iran S1A 2024-25 | 79 | 1,184 (823) | standard | 0.533 / 0.914 / 0.674 (0.711) | 0.673 / 0.932 / 0.781 (0.821) | +0.108 [+0.085, +0.137] |
+| | | 1,178 | >= 1 km from land | 0.680 / 0.914 / 0.780 (0.823) | 0.693 / 0.931 / 0.795 (0.836) | +0.015 [+0.002, +0.030] |
+| Iran S1C/S1D 2026-09 | 62 | 517 (359) | standard | 0.342 / 0.872 / 0.491 (0.532) | 0.499 / 0.905 / 0.644 (0.684) | +0.152 [+0.113, +0.207] |
+| | | 503 | >= 1 km from land | 0.494 / 0.871 / 0.631 (0.678) | 0.509 / 0.909 / 0.652 (0.691) | +0.022 [+0.004, +0.047] |
+| UAE test S1A 2024-25 | 92 | 3,900 (246) | standard | 0.716 / 0.927 / 0.808 (0.848) | 0.723 / 0.938 / 0.817 (0.854) | +0.009 [+0.002, +0.016] |
+| | | 3,900 | >= 1 km from land | 0.722 / 0.927 / 0.812 (0.852) | 0.724 / 0.938 / 0.817 (0.855) | +0.005 [-0.001, +0.013] |
+| UAE S1C/S1D 2026-09 | 47 | 1,899 (822) | standard | 0.585 / 0.927 / 0.718 (0.753) | 0.591 / 0.924 / 0.721 (0.758) | +0.003 [-0.006, +0.014] |
+| | | 1,893 | >= 1 km from land | 0.590 / 0.928 / 0.722 (0.757) | 0.591 / 0.924 / 0.721 (0.758) | -0.000 [-0.009, +0.011] |
+
+Neighbour-cell differences at >= 1 km: Iran S1A +0.013 [+0.001, +0.028],
+Iran S1C/S1D +0.013 [-0.004, +0.035]. S1A passes on datatakes with no
+train/val frame (49, mostly the inner-Gulf boxes), >= 1 km: CFAR 0.729,
+model 0.774 (+0.045 [+0.019, +0.079]).
+
+Model F1 per box, S1A, >= 1 km (GFW detections): Larak/Hormuz 0.847 (168),
+Kish 0.837 (46), Bandar Abbas 0.813 (734), Jask 0.740 (40), Bushehr 0.718
+(97), Kharg 0.707 (57), Assaluyeh 0.621 (36; precision 0.48, CFAR 0.28).
+
+**What it says.**
+- The model transfers to the Iranian coast with a modest loss. On S1A, away
+  from the coast, its F1 is 0.795 against 0.817 in the UAE test boxes (recall
+  0.93 in both; precision 0.69 against 0.72), and it stays significantly above
+  CFAR. On S1C/S1D it reaches 0.652 against 0.721 in the UAE boxes, mostly
+  through precision (0.51 against 0.59), with GFW's thinner S1C/S1D reference
+  (PLAN §17, 2026-10-04) applying here too.
+- Off Iran most GFW detections carry no AIS (70% on S1A 2024-25, against 6%
+  in the UAE test boxes), and the model finds 0.93 of them on S1A (UAE test:
+  0.81).
+- The model's large lead under the standard scoring (+0.11 to +0.15 F1) comes
+  almost entirely from the band 150 m to 1 km from land, where GFW reports
+  nothing: of their false alarms against GFW, 440 (CFAR) and 51 (model) lie
+  in cells within 1 km of land on the S1A passes (S1C/S1D: 420 and 28). Whether those are coastal clutter or real ships
+  moored near shore cannot be judged against GFW; the fair comparison is the
+  >= 1 km one, and the console should say that detections within about 1 km
+  of land are unmeasured.
+- Limits: the bootstrap resamples area-passes, and neighbouring boxes often
+  share a pass (20 of 63 S1A scenes and 21 of 41 S1C/S1D scenes serve two
+  boxes), so the intervals are somewhat narrow; Bandar Abbas and Larak share
+  one GFW cell at a corner; the per-box numbers rest on 9 to 734 GFW
+  detections; why precision is low at Assaluyeh (no OPD platform in that box)
+  was not looked at.
