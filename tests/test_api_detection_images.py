@@ -226,3 +226,37 @@ def test_an_image_asked_for_with_another_detections_key_is_not_served(client):
     url = f"/api/detections/{detection['id']}/chip/vv"
     assert client.get(url, params={"v": good}).status_code == 200
     assert client.get(url, params={"v": stale}).status_code == 404
+
+
+def test_an_image_is_served_for_the_key_the_console_builds_from_the_published_position(client):
+    """Stored positions carry more decimals than /api/detections publishes (6).
+
+    The console keys an image by the position it was given, so the API must
+    accept the position as published, not demand the stored one to 1e-7 deg.
+    """
+    scene = "S1D_IW_GRDH_1SDV_20261002T022240_TEST_COG.SAFE"
+    stored = (53.9990635153177, 26.582270324658545)
+    with session_scope(api._state["sessions"]) as session:
+        SceneRepository(session).upsert(Product(product_id=scene, name=scene))
+        scene_id = SceneRepository(session).id_for(scene)
+        store(
+            session,
+            scene_id,
+            box_around(54.0, 26.58, 20.0),
+            [stored],
+            "pointdet",
+            "kaggle-v2",
+            "DV",
+        )
+    image = api._state["settings"].data_dir / "chips" / chip_relpath(scene, *stored, "vv")
+    image.parent.mkdir(parents=True)
+    image.write_bytes(PNG)
+    detection = next(
+        d
+        for d in client.get("/api/detections", params={"detector": "product"}).json()["detections"]
+        if d["product_name"] == scene
+    )
+    key = f"{scene}/{detection['lat']}_{detection['lon']}/{detection['chip']['cut_at']}"
+    response = client.get(f"/api/detections/{detection['id']}/chip/vv", params={"v": key})
+    assert response.status_code == 200
+    assert response.content == PNG

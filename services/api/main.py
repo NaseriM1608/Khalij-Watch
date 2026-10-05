@@ -58,7 +58,11 @@ logger = logging.getLogger(__name__)
 
 
 def _same_detection(key: str, detection: DetectionView) -> bool:
-    """Whether a client's ``scene/lat_lon/...`` key names this detection (to about 1 cm)."""
+    """Whether a client's ``scene/lat_lon/...`` key names this detection.
+
+    The key holds the position as /api/detections published it
+    (POSITION_DECIMALS, about 10 cm), not as stored.
+    """
     scene, _, rest = key.partition("/")
     position = rest.partition("/")[0]
     try:
@@ -67,13 +71,15 @@ def _same_detection(key: str, detection: DetectionView) -> bool:
         return False
     return (
         scene == detection.product_name
-        and abs(lat - detection.lat) < 1e-7
-        and abs(lon - detection.lon) < 1e-7
+        and abs(lat - round(detection.lat, POSITION_DECIMALS)) < 1e-9
+        and abs(lon - round(detection.lon, POSITION_DECIMALS)) < 1e-9
     )
 
 
 # SQLite's largest INTEGER: a larger id cannot even be looked up.
 MAX_ROW_ID = 2**63 - 1
+# Decimals of a published detection position (about 10 cm).
+POSITION_DECIMALS = 6
 # How often the websocket pushes a refreshed viewport.
 STREAM_INTERVAL_S = 5.0
 MAX_TRACK_HOURS = 24 * 7
@@ -506,8 +512,8 @@ def _detection_to_json(
     return {
         "id": detection.id,
         "scene_id": detection.scene_id,
-        "lon": round(detection.lon, 6),
-        "lat": round(detection.lat, 6),
+        "lon": round(detection.lon, POSITION_DECIMALS),
+        "lat": round(detection.lat, POSITION_DECIMALS),
         "acq_time": detection.acq_time.isoformat(),
         # Explicit, so a detection from an old pass can never look current.
         "age_hours": round(detection.age_seconds(now) / 3600, 2),
