@@ -102,3 +102,12 @@ def test_a_pass_without_any_presence_gives_no_events():
     events, summary = run([(12, SarDetection(56.58, 25.27, 0.9))], [])
     assert events == []
     assert summary["no_presence"] is True
+
+
+def test_on_a_gfw_artefact_pass_gfws_unmatched_flag_corroborates_nothing():
+    # GFW matched none of 12 detections although 20+ AIS vessels sit in the box.
+    fixes = [f for i in range(25) for f in anchored(f"v{i}", 56.45 + 0.004 * i, 25.15)]
+    refs = [(56.44 + 0.01 * i, 25.16, 1, False) for i in range(11)] + [(56.58, 25.27, 1, False)]
+    events, summary = run([(12, SarDetection(56.58, 25.27, 0.9))], fixes, refs=refs)
+    assert summary["gfw_artefact"] is True
+    assert events[0].evidence["gfw"] == {"cell_matched": None, "corroborates": None}

@@ -68,3 +68,12 @@ def test_a_named_pass_too_young_for_gfw_is_refused():
 def test_no_pass_old_enough_is_an_error():
     with pytest.raises(ValueError, match="no stored pass"):
         pick_pass([view(1, 7, RECENT, "S1C_RECENT")], now=NOW)
+
+
+def test_model_detections_from_an_older_model_version_are_not_used():
+    # The 2026-09-27 Fujairah pass in the console DB holds run 1 (kaggle-v1) detections only.
+    stale = view(9, 8, dt.datetime(2026, 9, 27, 2, 14, tzinfo=dt.UTC), "S1D_STALE")
+    stale = DetectionView(**{**stale.__dict__, "detector_version": "kaggle-v1"})
+    cfar = view(10, 5, OLD, "S1D_OLD", detector="cfar")
+    chosen = pick_pass([stale, cfar], now=NOW)
+    assert chosen.product_name == "S1D_OLD"

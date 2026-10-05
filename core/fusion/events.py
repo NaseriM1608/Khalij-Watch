@@ -102,7 +102,8 @@ def dark_vessel_events(
             margin_m=margin_m,
             margins=margins,
             r_over_v_s=r_over_v_s,
-            gfw_matched=gfw_flag_for(detection.lon, detection.lat, refs),
+            # On a GFW matching artefact its "unmatched" says nothing about AIS.
+            gfw_matched=None if artefact else gfw_flag_for(detection.lon, detection.lat, refs),
             pass_flags=flags,
             datasets=datasets,
         )

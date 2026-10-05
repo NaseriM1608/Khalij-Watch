@@ -37,6 +37,10 @@ from core.db.repository import DetectionView  # noqa: E402
 # GFW SAR detections are published about 5 days after a pass, presence about 96 h.
 MIN_PASS_AGE = dt.timedelta(days=5)
 RUN = "fusion-v1"
+# Model detections are used only from the product model (run 2); older runs'
+# rows may still be stored (the 2026-09-27 Fujairah pass holds run 1's).
+PRODUCT_MODEL_VERSION = "kaggle-v2"
+MODEL_DETECTOR = "pointdet"
 SUMMARY = Path("models/runs/kaggle-v2/fusion_v1/summary.json")
 PRESENCE_CACHE = Path("data/fusion")
 
@@ -52,9 +56,14 @@ class StoredPass:
 def pick_pass(
     views: Sequence[DetectionView], *, now: dt.datetime, scene: str | None = None
 ) -> StoredPass:
-    """The named pass, or the newest stored pass old enough for GFW to have published its data."""
+    """The named pass, or the newest stored pass old enough for GFW to have published its data.
+
+    Model detections from other than the product model's version are ignored.
+    """
     by_scene: dict[int, list[DetectionView]] = {}
     for v in views:
+        if v.detector == MODEL_DETECTOR and v.detector_version != PRODUCT_MODEL_VERSION:
+            continue
         by_scene.setdefault(v.scene_id, []).append(v)
     passes = [
         StoredPass(sid, vs[0].product_name, vs[0].acq_time, vs) for sid, vs in by_scene.items()
