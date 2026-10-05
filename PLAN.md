@@ -2382,8 +2382,9 @@ at 2 km, 0.500 at 10 km).
 |---|---|---|---|---|---|
 | Validation, S1A 2024-25 | 25 (0 / 3) | 1,288 | 4.0% [2.6, 5.8] | 6.5 / 9.2 / 2.2% | 0.656 |
 | Test, S1A 2024-25 | 92 (0 / 8) | 4,747 | 4.0% [3.2, 5.3] | 7.0 / 16.8 / 1.8% | 0.668 |
-| S1A 2026 Jan-Feb | 9 of 21 kept passes' acquisitions: 4 | 466 | 3.2% [2.2, 5.1] | | |
-| S1A 2026 28 Feb-29 Jun | 5 acquisitions | 535 | 49% [8.5, 90] | | |
+| S1A 2026 Jan-Feb (part of the 21 below) | 4 acquisitions | 466 | 3.2% [2.2, 5.1] | | |
+| S1A 2026 28 Feb-29 Jun (part of the 21 below) | 5 acquisitions | 535 | 49% [8.5, 90] | | |
+| S1A 2026 Jan-Jun, all | 21 (4 / 10) | 1,001 | 27.8% [4.7, 61] | 27.3 / 16.7 / 28.5% | 0.765 |
 | S1C/S1D 2026-09-08..29 | 42 (5 / 18) | 2,483 | 7.9% [6.3, 9.7] | 18.4 / 91 (10 of 11) / 5.4% | 0.669 |
 
 Intervals resample whole acquisitions. The rate falls steeply with the margin
