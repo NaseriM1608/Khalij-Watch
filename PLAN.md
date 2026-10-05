@@ -2425,3 +2425,6 @@ bootstrap interval as a curve over the gate margin, by region and period
 chosen on validation passes only (yes) and the pre-filter settings fixed a
 priori (never tuned, on test or otherwise); agreement with GFW's matched flag
 reported (yes).
+The user accepted Phase 6 v1 as done on 2026-10-05 and chose to move to
+Phase 7; the refinements (pre-filter tuning, run 2 on stored passes, ghost and
+footprint filters, per-sub-swath R/V) move to Phase 8.
