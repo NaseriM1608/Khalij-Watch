@@ -2335,3 +2335,92 @@ cards, and the dark rate is reported with a bootstrap interval as a curve
 over the gate margin, by region and period, with the operating margin and
 pre-filter settings chosen on validation passes only and v1's agreement with
 GFW's matched flag reported.
+
+### 2026-10-05 - Phase 6 v1: cell-hour fusion and first dark rates
+
+The user chose to build v1 on GFW hourly presence (2026-10-04). Built test
+first in `core/fusion/` (presence tracks and fetcher, gate, one-to-one
+assignment with candidate sets, pre-filters, dark rate with bootstrap,
+guards, evidence cards, events), `scripts/fuse_passes.py` (batch over the
+processed passes), `scripts/fuse_scene.py` (one stored pass into DARK_VESSEL
+events), an `events` table keyed by scene and run, and `GET /api/events`
+(commits `815f1c3` to `40dfb7d`). Two multi-agent reviews found and fixed:
+tracks seen only at H-1 and H (or H and H+1) not reaching the pass time (now
+extended by the pass's fraction of the hour; on the busy Fujairah pass this
+moved 3 of 9 dark detections at margin 0 into a gate); the presence dataset
+version not kept; gap flags and bootstrap per area-pass although boxes of
+one overpass share its AIS feed (now per acquisition); a read timeout
+resending a 4Wings report GFW may still be computing; zero-width [0, 0]
+intervals.
+
+**Two GFW data faults handled.** (1) Presence is incomplete on some dates:
+on 2026-09-09 02:14 the Fujairah box held 8 presence vessels while GFW matched
+64 of its own detections there to AIS. A pass whose box holds fewer presence
+vessels than half of the GFW detections expected to carry AIS (at least 10)
+has a presence gap; the gap marks every box of that acquisition, and those
+passes are left out of the dark rate and counted. Passes with too few GFW
+detections to judge are counted as unguarded. (2) The orbit artefact (§17,
+2026-10-04): passes where GFW matched none of at least 10 detections while at
+least 20 AIS vessels were in the box are left out of the agreement with GFW
+(our own fusion uses presence, which is intact at those hours); evidence
+cards there carry no GFW corroboration.
+
+**Batch.** GFW presence for H-1..H+1 over each box buffered by 25 km, for all
+189 processed area-passes (validation 25, test 92, S1A 2026 25, S1C/S1D 47),
+one report at a time: 189 fused, 0 failed, about 90 min. Our detections are
+the frozen product model's (run 2, 256/64, 0.60) from the comparison runs;
+pre-filters: duplicates within 100 m, 1 km from land (GFW's convention),
+300 m from OPD platforms, 500 m from the box edge (all fixed a priori, not
+tuned); R/V bound 118 s.
+
+**Operating margin, chosen on the 25 validation passes only:** 0 m, the
+margin with the highest balanced agreement between our "has an AIS
+candidate" call and GFW's matched flag (0.656 at 0 m, 0.615 at 500 m, 0.524
+at 2 km, 0.500 at 10 km).
+
+| Set | Area-passes used (gap / unguarded) | Kept | Dark rate at 0 m [95% CI] | Inner Gulf / Hormuz / Gulf of Oman | Balanced agreement with GFW |
+|---|---|---|---|---|---|
+| Validation, S1A 2024-25 | 25 (0 / 3) | 1,288 | 4.0% [2.6, 5.8] | 6.5 / 9.2 / 2.2% | 0.656 |
+| Test, S1A 2024-25 | 92 (0 / 8) | 4,747 | 4.0% [3.2, 5.3] | 7.0 / 16.8 / 1.8% | 0.668 |
+| S1A 2026 Jan-Feb | 9 of 21 kept passes' acquisitions: 4 | 466 | 3.2% [2.2, 5.1] | | |
+| S1A 2026 28 Feb-29 Jun | 5 acquisitions | 535 | 49% [8.5, 90] | | |
+| S1C/S1D 2026-09-08..29 | 42 (5 / 18) | 2,483 | 7.9% [6.3, 9.7] | 18.4 / 91 (10 of 11) / 5.4% | 0.669 |
+
+Intervals resample whole acquisitions. The rate falls steeply with the margin
+(test: 4.0% at 0 m, 2.1% at 500 m, 0.5% at 2 km, 0.0% at 10 km; S1C/S1D:
+7.9, 3.5, 1.2, 0.4%). S1A 2026 used 21 of its 25 area-passes (4 in gap
+acquisitions; 10 of the 21 unguarded).
+
+**What the numbers can and cannot say.**
+- v1 is conservative: on test it calls dark 70 of the 196 detections GFW
+  left unmatched (36%) and 74 of the 3,600 GFW matched (2.1%). Half its dark
+  calls on GFW detections (74 of 144) are ships GFW matched with its own,
+  position-level AIS, which hourly presence lacks in those hours. So the v1
+  dark rate is not a count of dark ships; it is a consistent measure for
+  comparing periods and regions with the same method, and GFW's unmatched
+  share remains the external comparison.
+- The rise from 4.0% (2024-25) to 7.9% (September 2026) and the 49% of
+  March-June 2026 follow the AIS collapse measured in the trend probe; the
+  spring 2026 figure rests on 5 acquisitions and its interval spans 8-90%.
+- Hormuz lanes has few AIS vessels in its box at most passes (10 of 11 kept
+  detections dark in September 2026), so its rate mostly measures AIS absence.
+- Unguarded passes (gap rule not judgeable) stay in: 8 of 92 on test, 18 of 42
+  on S1C/S1D.
+- Not done: azimuth ghosts and the footprint's no-data edge (no scene
+  geometry cached), per-sub-swath R/V (118 s bound), a CFAR-length stratum
+  (CFAR lengths are not in the comparison results), cutting the SAR chip for
+  cards (Phase 7).
+
+**Product path.** `scripts/fuse_scene.py` fused the newest stored Fujairah
+pass old enough for GFW (S1D 2026-09-10 02:06, CFAR detections; run 1 rows of
+later passes are ignored): 168 kept, 147 AIS vessels in the box, 9 DARK_VESSEL
+events (8 low, 1 medium confidence), served by `/api/events` with their
+evidence cards; the pass is a GFW artefact pass, flagged on every card.
+
+**Phase 6 done-when** (agreed 2026-10-04): dark-vessel candidates in the five
+boxes are flagged with evidence cards (yes); the dark rate is reported with a
+bootstrap interval as a curve over the gate margin, by region and period
+(yes, `models/runs/kaggle-v2/fusion_v1/summary.json`); the operating margin
+chosen on validation passes only (yes) and the pre-filter settings fixed a
+priori (never tuned, on test or otherwise); agreement with GFW's matched flag
+reported (yes).
