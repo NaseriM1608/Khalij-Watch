@@ -15,12 +15,19 @@
  * Dark-vessel candidates - radar detections that no AIS vessel's hourly track
  * reaches - are the visual priority: thicker rings, red to amber by
  * confidence, drawn above everything and never clustered away.
+ *
+ * Areas a detector searched are outlined: the requested box clipped to what
+ * the pass imaged. Rings come only from inside them, so empty water outside
+ * reads "not searched", not "no ship"; inside, no ring is still not proof of
+ * no ship. Dashed: an untested detector, or outside the five study boxes.
  */
 
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
+  ANALYSED_COLOUR,
+  AnalysedWindow,
   AnalystEvent,
   BBox,
   CLASS_COLOURS,
@@ -45,6 +52,8 @@ const SCENE_SOURCE = "scenes";
 const DETECTION_SOURCE = "detections";
 const DARK_SOURCE = "dark-events";
 const EVENT_AIS_SOURCE = "event-ais";
+const ANALYSED_SOURCE = "analysed";
+const ANALYSED_FILL = "analysed-fill";
 const VESSEL_LAYERS = ["vessel-arrows", "vessel-dots"];
 const DETECTION_LAYER = "detection-rings";
 const DARK_LAYER = "dark-rings";
@@ -60,6 +69,7 @@ interface Props {
   darkEvents: AnalystEvent[];
   selectedEvent: AnalystEvent | null;
   onSelectEvent: (id: number | null) => void;
+  analysed: AnalysedWindow[];
 }
 
 function toFeatureCollection(vessels: Vessel[]): GeoJSON.FeatureCollection {
@@ -107,8 +117,44 @@ function toDetectionFeatures(
         detector: [detection.detector, detection.detector_version]
           .filter(Boolean)
           .join(" "),
+        measured:
+          detection.tested === undefined
+            ? "unknown"
+            : detection.tested
+              ? "yes (tested in this UAE study box)"
+              : "no: accuracy not measured here",
       },
     })),
+  };
+}
+
+function toAnalysedFeatures(windows: AnalysedWindow[]): GeoJSON.FeatureCollection {
+  // /api/detections (auto) draws the model's rings on a pass where it ran, CFAR's elsewhere.
+  const modelPasses = new Set(
+    windows.filter((w) => w.detector === "pointdet").map((w) => w.scene_id),
+  );
+  return {
+    type: "FeatureCollection",
+    features: windows
+      .filter((window) => window.searched.length >= 3)
+      .map((window) => ({
+        type: "Feature",
+        geometry: {
+          type: "Polygon",
+          coordinates: [[...window.searched, window.searched[0]]],
+        },
+        properties: {
+          tested: window.tested,
+          pass: `${window.satellite} ${window.acq_time.slice(0, 16).replace("T", " ")} UTC`,
+          ageHours: window.age_hours,
+          detections: window.detections,
+          detector: [window.detector, window.detector_version, window.polarisation]
+            .filter(Boolean)
+            .join(" "),
+          shown: (window.detector === "pointdet") === modelPasses.has(window.scene_id),
+          share: window.searched_share,
+        },
+      })),
   };
 }
 
@@ -192,6 +238,7 @@ export function VesselMap({
   darkEvents,
   selectedEvent,
   onSelectEvent,
+  analysed,
 }: Props) {
   const container = useRef<HTMLDivElement>(null);
   const map = useRef<MapLibreMap | null>(null);
@@ -224,6 +271,7 @@ export function VesselMap({
         DETECTION_SOURCE,
         DARK_SOURCE,
         EVENT_AIS_SOURCE,
+        ANALYSED_SOURCE,
         "aoi",
       ]) {
         instance.addSource(id, {
@@ -259,6 +307,42 @@ export function VesselMap({
           "line-color": "#2f4a6d",
           "line-width": 1,
           "line-dasharray": [3, 3],
+        },
+      });
+
+      // Where a detector searched: a faint tint (also what a click finds) and
+      // an outline, dashed where its accuracy was never measured. Both fade
+      // with the pass's age: a search is one past moment.
+      instance.addLayer({
+        id: ANALYSED_FILL,
+        type: "fill",
+        source: ANALYSED_SOURCE,
+        paint: {
+          "fill-color": ANALYSED_COLOUR,
+          "fill-opacity": ["interpolate", ["linear"], ["get", "ageHours"], 0, 0.07, 336, 0.02],
+        },
+      });
+      instance.addLayer({
+        id: "analysed-outline",
+        type: "line",
+        source: ANALYSED_SOURCE,
+        filter: ["get", "tested"],
+        paint: {
+          "line-color": ANALYSED_COLOUR,
+          "line-width": 1.2,
+          "line-opacity": passAgeOpacity(),
+        },
+      });
+      instance.addLayer({
+        id: "analysed-outline-untested",
+        type: "line",
+        source: ANALYSED_SOURCE,
+        filter: ["!", ["get", "tested"]],
+        paint: {
+          "line-color": ANALYSED_COLOUR,
+          "line-width": 1.2,
+          "line-opacity": passAgeOpacity(),
+          "line-dasharray": [4, 3],
         },
       });
 
@@ -437,7 +521,14 @@ export function VesselMap({
         const seen = instance.queryRenderedFeatures(event.point, {
           layers: [DETECTION_LAYER],
         });
-        if (seen.length) showDetectionPopup(instance, seen[0]);
+        if (seen.length) {
+          showDetectionPopup(instance, seen[0]);
+          return;
+        }
+        const searched = instance.queryRenderedFeatures(event.point, {
+          layers: [ANALYSED_FILL],
+        });
+        if (searched.length) showAnalysedPopup(instance, event.lngLat, searched);
       };
       instance.on("click", pick);
       for (const layer of [...VESSEL_LAYERS, DETECTION_LAYER, DARK_LAYER]) {
@@ -493,6 +584,13 @@ export function VesselMap({
     ) as maplibregl.GeoJSONSource;
     source?.setData(toDetectionFeatures(detections));
   }, [detections, loaded]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !loaded) return;
+    const source = instance.getSource(ANALYSED_SOURCE) as maplibregl.GeoJSONSource;
+    source?.setData(toAnalysedFeatures(analysed));
+  }, [analysed, loaded]);
 
   useEffect(() => {
     const instance = map.current;
@@ -630,6 +728,7 @@ function showDetectionPopup(
     ["Size", String(properties.size ?? "")],
     ["Heading", String(properties.heading ?? "")],
     ["Detector", String(properties.detector ?? "")],
+    ["Detector checked here", String(properties.measured ?? "unknown")],
   ];
 
   // Built from DOM nodes with textContent, never from an HTML string.
@@ -656,6 +755,48 @@ function showDetectionPopup(
     .setLngLat([coordinates[0], coordinates[1]])
     .setDOMContent(root)
     .addTo(instance);
+}
+
+/** Explain a searched area: which passes, when, what was found, and how far to trust it. */
+function showAnalysedPopup(
+  instance: MapLibreMap,
+  at: maplibregl.LngLat,
+  features: maplibregl.MapGeoJSONFeature[],
+): void {
+  const root = document.createElement("div");
+  root.className = "radar-popup";
+  const title = document.createElement("strong");
+  title.textContent = "Searched once, at the pass time";
+  root.append(title);
+  for (const feature of features) {
+    const properties = feature.properties ?? {};
+    const row = document.createElement("div");
+    const name = document.createElement("span");
+    name.textContent = `${properties.pass ?? ""} · ${formatAge(Number(properties.ageHours) * 3600)}`;
+    const text = document.createElement("span");
+    const count = Number(properties.detections);
+    const share = Number(properties.share);
+    text.textContent = [
+      `${count} detection${count === 1 ? "" : "s"} · ${properties.detector ?? ""}`,
+      properties.shown ? "rings shown" : "rings not shown (the model's are)",
+      share < 0.99 ? `${Math.round(share * 100)}% of the box imaged` : "",
+      properties.tested ? "tested here" : "accuracy unknown",
+    ]
+      .filter(Boolean)
+      .join(" · ");
+    row.append(name, text);
+    root.append(row);
+  }
+  const untested = features.some((f) => !f.properties?.tested);
+  const note = document.createElement("p");
+  note.textContent = untested
+    ? "Accuracy unknown: an untested detector, or outside the five UAE study boxes. Its rings may be false and it may have missed ships."
+    : "Tested here against Global Fishing Watch. Even so it misses some ships (on test passes about 1 in 5 of those GFW saw without AIS).";
+  root.append(note);
+  const absence = document.createElement("p");
+  absence.textContent = "No ring is not proof of no ship.";
+  root.append(absence);
+  new maplibregl.Popup({ maxWidth: "300px" }).setLngLat(at).setDOMContent(root).addTo(instance);
 }
 
 /**

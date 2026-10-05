@@ -220,6 +220,33 @@ class Event(Base):
     run: Mapped[str | None] = mapped_column(String(32))
 
 
+class AnalysedWindow(Base):
+    """One detector run over one box of one pass: where the radar picture was searched.
+
+    Coverage honesty (PLAN §10): a footprint says the satellite imaged an area;
+    only an analysed window says a detector searched it. Recorded with every
+    run, also when nothing was found, so "no ship here" and "not analysed"
+    can be told apart.
+    """
+
+    __tablename__ = "analysed_windows"
+    __table_args__ = (Index("ix_analysed_windows_scene_detector", "scene_id", "detector"),)
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    scene_id: Mapped[int] = mapped_column(ForeignKey("sar_scenes.id"), nullable=False)
+    detector: Mapped[str] = mapped_column(String(64), nullable=False)
+    detector_version: Mapped[str | None] = mapped_column(String(32))
+    # As stored with the detections ("VH", "DV"...): windows are replaced per
+    # polarisation, as detections are.
+    polarisation: Mapped[str | None] = mapped_column(String(8))
+    min_lon: Mapped[float] = mapped_column(Float, nullable=False)
+    min_lat: Mapped[float] = mapped_column(Float, nullable=False)
+    max_lon: Mapped[float] = mapped_column(Float, nullable=False)
+    max_lat: Mapped[float] = mapped_column(Float, nullable=False)
+    # Detections the run stored; the API serves the count stored now instead.
+    detections: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+
+
 class Zone(Base):
     """A user-drawn geofence."""
 

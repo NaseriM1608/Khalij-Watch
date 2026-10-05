@@ -26,8 +26,18 @@ from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from core.areas import (
+    STUDY_AREAS,
+    clip_to_box,
+    inside_study_box,
+    is_tested,
+    ring_area,
+    study_area_of,
+)
 from core.config import load_settings
 from core.db.repository import (
+    AnalysedWindowRepository,
+    AnalysedWindowView,
     DetectionRepository,
     DetectionView,
     EventRepository,
@@ -290,6 +300,69 @@ async def detections(
     }
 
 
+@app.get("/api/analysed")
+async def analysed(
+    bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
+    days: int = Query(default=14, ge=1, le=365),
+) -> dict[str, Any]:
+    """Where a detector searched recent and fused passes, and whether it was tested there.
+
+    Coverage honesty (PLAN §10): a radar footprint says the satellite imaged
+    an area; only a search says a detector looked, once, at the pass time.
+    Outside every search no ring means "not searched"; inside one, no ring is
+    still not proof of no ship. ``searched`` is the requested box clipped to
+    the pass footprint (a box can reach beyond the swath); ``tested`` is true
+    only for a detector configuration measured against GFW, searching wholly
+    inside one of the five study boxes. Searches of passes with dark-vessel
+    events are included whatever their age, as those events are.
+    """
+    box = _parse_bbox(bbox)
+    now = dt.datetime.now(dt.UTC)
+    with session_scope(_sessions()) as session:
+        found = AnalysedWindowRepository(session).recent(box, since=now - dt.timedelta(days=days))
+    windows = [w for w in (_window_to_json(f, now) for f in found) if w["searched"]]
+    return {
+        "generated_at": now.isoformat(),
+        "count": len(windows),
+        "windows": windows,
+        "study_areas": sorted(STUDY_AREAS),
+        "attribution": "Contains modified Copernicus Sentinel data",
+    }
+
+
+def _window_to_json(window: AnalysedWindowView, now: dt.datetime) -> dict[str, Any]:
+    box = window.bbox
+    whole = [
+        (box.min_lon, box.min_lat),
+        (box.max_lon, box.min_lat),
+        (box.max_lon, box.max_lat),
+        (box.min_lon, box.max_lat),
+    ]
+    footprint = parse_polygon_wkt(window.footprint_wkt)
+    # Without a stored footprint the box is all that is known (not expected).
+    searched = clip_to_box(footprint, box) if footprint else whole
+    area = inside_study_box(searched)
+    return {
+        "id": window.id,
+        "scene_id": window.scene_id,
+        "product_name": window.product_name,
+        "satellite": window.satellite,
+        "acq_time": window.acq_time.isoformat(),
+        "age_hours": round((now - window.acq_time).total_seconds() / 3600, 1),
+        "detector": window.detector,
+        "detector_version": window.detector_version,
+        "polarisation": window.polarisation,
+        "detections": window.detections,
+        "bbox": _bbox_json(box),
+        "searched": [[round(lon, 6), round(lat, 6)] for lon, lat in searched],
+        "searched_share": round(ring_area(searched) / ring_area(whole), 3) if searched else 0.0,
+        "footprint_known": bool(footprint),
+        "study_area": area,
+        "tested": area is not None
+        and is_tested(window.detector, window.detector_version, window.polarisation),
+    }
+
+
 @app.get("/api/events")
 async def events(
     bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
@@ -385,6 +458,11 @@ def _detection_to_json(detection: DetectionView, now: dt.datetime) -> dict[str, 
         "pixel_count": detection.pixel_count,
         "peak_dn": _rounded(detection.peak_dn),
         "product_name": detection.product_name,
+        # The detector was measured only in the five UAE study boxes; null elsewhere.
+        "study_area": study_area_of(detection.lon, detection.lat),
+        # A tested detector configuration, in a study box.
+        "tested": study_area_of(detection.lon, detection.lat) is not None
+        and is_tested(detection.detector, detection.detector_version, detection.polarisation),
     }
 
 

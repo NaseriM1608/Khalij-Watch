@@ -11,6 +11,8 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { VesselMap } from "./VesselMap";
 import {
   ANOMALY_LABELS,
+  AnalysedResponse,
+  AnalysedWindow,
   AnalystEvent,
   BBox,
   CLASS_COLOURS,
@@ -43,6 +45,7 @@ const RADAR_LOOKBACK_DAYS = 14;
 // A stable empty list, so hiding the layer does not re-render the map each tick.
 const NO_DETECTIONS: SarDetection[] = [];
 const NO_EVENTS: AnalystEvent[] = [];
+const NO_WINDOWS: AnalysedWindow[] = [];
 const TIERS: ConfidenceTier[] = ["high", "medium", "low"];
 // The feed lists this many candidates; the count above it says how many exist.
 const FEED_LENGTH = 25;
@@ -72,6 +75,8 @@ export default function App() {
   const [showCoverage, setShowCoverage] = useState(true);
   const [radar, setRadar] = useState<DetectionsResponse | null>(null);
   const [radarError, setRadarError] = useState<string | null>(null);
+  const [analysed, setAnalysed] = useState<AnalysedResponse | null>(null);
+  const [analysedError, setAnalysedError] = useState<string | null>(null);
   const [showRadar, setShowRadar] = useState(true);
   const [dark, setDark] = useState<EventsResponse | null>(null);
   const [darkError, setDarkError] = useState<string | null>(null);
@@ -106,6 +111,35 @@ export default function App() {
       clearInterval(timer);
     };
   }, []);
+
+  // Where the detector searched: changes only when a detection job runs.
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      try {
+        const response = await api.analysed(RADAR_LOOKBACK_DAYS);
+        if (cancelled) return;
+        setAnalysed(response);
+        setAnalysedError(null);
+      } catch (err) {
+        if (!cancelled) setAnalysedError((err as Error).message);
+      }
+    };
+    load();
+    const timer = setInterval(load, RADAR_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
+  }, []);
+
+  const searchedCounts = useMemo(() => {
+    const windows = analysed?.windows ?? [];
+    return {
+      tested: windows.filter((w) => w.tested).length,
+      untested: windows.filter((w) => !w.tested).length,
+    };
+  }, [analysed]);
 
   // Fusion runs in batch days after a pass, so events change rarely.
   useEffect(() => {
@@ -326,7 +360,34 @@ export default function App() {
               <span className="legend-count">{radar?.count ?? 0}</span>
             </span>
           </label>
+          {analysedError ? (
+            <p className="hint">
+              The areas detectors searched could not be loaded, so the map
+              cannot show where no ring means not searched.
+            </p>
+          ) : (
+            <p className="hint">
+              Rings come only from the outlined areas a detector searched, once
+              per pass. Outside them, no ring means not searched. Inside, no
+              ring is not proof of no ship either: detectors miss some vessels.
+            </p>
+          )}
+          <ul className="legend searched-key">
+            <li>
+              <span className="box-swatch" />
+              <span className="legend-label">Searches by a detector tested there</span>
+              <span className="legend-count">{searchedCounts.tested}</span>
+            </li>
+            <li>
+              <span className="box-swatch dashed" />
+              <span className="legend-label">
+                Searches with accuracy unknown (untested detector, or outside the UAE study boxes)
+              </span>
+              <span className="legend-count">{searchedCounts.untested}</span>
+            </li>
+          </ul>
           {radarError && <p className="error">{radarError}</p>}
+          {analysedError && <p className="error">{analysedError}</p>}
         </section>
 
         <section className="panel">
@@ -509,6 +570,7 @@ export default function App() {
           darkEvents={showDark ? (dark?.events ?? NO_EVENTS) : NO_EVENTS}
           selectedEvent={selectedEvent}
           onSelectEvent={selectEvent}
+          analysed={showRadar ? (analysed?.windows ?? NO_WINDOWS) : NO_WINDOWS}
         />
       </main>
 

@@ -14,13 +14,20 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from typing import Protocol
 
-from sqlalchemy import func, insert, select, text
+from sqlalchemy import func, insert, or_, select, text
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.orm import Session
 
 from core.ais.messages import AisPositionReport, VesselStatic, coarse_class
 from core.ais.plausibility import ScoredPosition
-from core.db.models import AisPosition, Detection, Event, SarScene, Vessel
+from core.db.models import (
+    AisPosition,
+    AnalysedWindow,
+    Detection,
+    Event,
+    SarScene,
+    Vessel,
+)
 from core.db.spatial import BBox, bbox_filter_sql, bbox_params
 
 # Positions are written in batches; a per-message round trip cannot keep up
@@ -759,3 +766,132 @@ def _event_view(e: Event) -> EventView:
         evidence=e.evidence,
         acknowledged=e.acknowledged,
     )
+
+
+@dataclass(frozen=True)
+class AnalysedWindowView:
+    """An analysed window as the API serves it, with its pass."""
+
+    id: int
+    scene_id: int
+    product_name: str
+    satellite: str
+    acq_time: dt.datetime
+    detector: str
+    detector_version: str | None
+    polarisation: str | None
+    # Detections stored now inside the window for its pass, detector and polarisation.
+    detections: int
+    bbox: BBox
+    # The pass footprint, which the searched area is clipped to.
+    footprint_wkt: str | None
+
+
+class AnalysedWindowRepository:
+    """Where a detector searched: one record per pass, detector, polarisation and box (PLAN §10)."""
+
+    # A re-run recomputes its box from the same centre and size: equal far below a metre.
+    SAME_BOX_DEG = 1e-6
+
+    def __init__(self, session: Session) -> None:
+        self._session = session
+
+    def record(
+        self,
+        scene_id: int,
+        bbox: BBox,
+        *,
+        detector: str,
+        detector_version: str | None,
+        polarisation: str,
+        detections: int,
+    ) -> None:
+        """Record a run over a window, replacing an earlier run of the detector and channel over that box.
+
+        Keyed like ``DetectionRepository.replace_in_bbox`` (pass, detector,
+        polarisation), plus the box itself.
+        """
+        if detections < 0:
+            raise ValueError(f"a window cannot hold {detections} detections")
+        same_box = [
+            func.abs(column - value) < self.SAME_BOX_DEG
+            for column, value in (
+                (AnalysedWindow.min_lon, bbox.min_lon),
+                (AnalysedWindow.min_lat, bbox.min_lat),
+                (AnalysedWindow.max_lon, bbox.max_lon),
+                (AnalysedWindow.max_lat, bbox.max_lat),
+            )
+        ]
+        self._session.query(AnalysedWindow).filter(
+            AnalysedWindow.scene_id == scene_id,
+            AnalysedWindow.detector == detector,
+            AnalysedWindow.polarisation == polarisation,
+            *same_box,
+        ).delete(synchronize_session=False)
+        self._session.add(
+            AnalysedWindow(
+                scene_id=scene_id,
+                detector=detector,
+                detector_version=detector_version,
+                polarisation=polarisation,
+                min_lon=bbox.min_lon,
+                min_lat=bbox.min_lat,
+                max_lon=bbox.max_lon,
+                max_lat=bbox.max_lat,
+                detections=detections,
+            )
+        )
+        self._session.flush()
+
+    def recent(
+        self, bbox: BBox, *, since: dt.datetime, limit: int = 2_000
+    ) -> list[AnalysedWindowView]:
+        """Windows overlapping ``bbox`` of passes acquired since ``since``, newest pass first.
+
+        Passes with events are included whatever their age: their dark-vessel
+        candidates are always shown, and so must be the area they came from.
+        Counts are of the detections stored now, which a later overlapping run
+        may have replaced.
+        """
+        stored_now = (
+            select(func.count(Detection.id))
+            .where(
+                Detection.scene_id == AnalysedWindow.scene_id,
+                Detection.detector == AnalysedWindow.detector,
+                Detection.polarisation == AnalysedWindow.polarisation,
+                Detection.lon.between(AnalysedWindow.min_lon, AnalysedWindow.max_lon),
+                Detection.lat.between(AnalysedWindow.min_lat, AnalysedWindow.max_lat),
+            )
+            .correlate(AnalysedWindow)
+            .scalar_subquery()
+        )
+        fused = select(Event.scene_id).where(Event.scene_id.is_not(None))
+        query = (
+            select(AnalysedWindow, SarScene, stored_now)
+            .join(SarScene, SarScene.id == AnalysedWindow.scene_id)
+            .where(
+                AnalysedWindow.max_lon >= bbox.min_lon,
+                AnalysedWindow.min_lon <= bbox.max_lon,
+                AnalysedWindow.max_lat >= bbox.min_lat,
+                AnalysedWindow.min_lat <= bbox.max_lat,
+                or_(SarScene.acq_time >= _as_utc(since), AnalysedWindow.scene_id.in_(fused)),
+            )
+            .order_by(SarScene.acq_time.desc(), AnalysedWindow.id)
+            .limit(limit)
+        )
+        return [
+            AnalysedWindowView(
+                id=window.id,
+                scene_id=window.scene_id,
+                product_name=scene.product_name,
+                satellite=scene.satellite,
+                acq_time=_as_utc(scene.acq_time),
+                detector=window.detector,
+                detector_version=window.detector_version,
+                polarisation=window.polarisation,
+                detections=count,
+                bbox=BBox(window.min_lon, window.min_lat, window.max_lon, window.max_lat),
+                footprint_wkt=scene.footprint_wkt,
+            )
+            for window, scene, count in self._session.execute(query).all()
+        ]

@@ -422,3 +422,16 @@ body {
   border: 1px dashed var(--line);
   border-radius: 5px;
 }
+
+/* Boxes a detector searched: solid where it was tested, dashed elsewhere. */
+.box-swatch {
+  width: 14px;
+  height: 10px;
+  flex: none;
+  display: inline-block;
+  border: 1.5px solid #9fb3c8;
+  background: rgba(159, 179, 200, 0.08);
+}
+.box-swatch.dashed { border-style: dashed; }
+.searched-key { margin-top: 6px; }
+.searched-key li { display: flex; align-items: center; gap: 8px; padding: 3px 6px; font-size: 11px; }

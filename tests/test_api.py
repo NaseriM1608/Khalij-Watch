@@ -321,6 +321,18 @@ def test_detections_endpoint_returns_radar_contacts(client):
     assert body["attribution"].startswith("Contains modified Copernicus")
 
 
+def test_every_detection_says_whether_the_detector_was_measured_where_it_lies(client):
+    """The model was trained and tested off the UAE only: elsewhere its accuracy is unknown."""
+    _seed_detection(api._state["sessions"])  # in the Hormuz lanes study box
+    _seed_detection(api._state["sessions"], lon=56.25, lat=27.03)  # Bandar Abbas anchorage
+
+    found = client.get("/api/detections").json()["detections"]
+
+    assert {d["lat"]: d["study_area"] for d in found} == {26.5: "hormuz_lanes", 27.03: None}
+    # Seeded as CFAR version "test": not a configuration measured against GFW.
+    assert {d["tested"] for d in found} == {False}
+
+
 def test_every_detection_carries_the_age_of_its_radar_pass(client):
     """A detection is a snapshot from the last pass; it must never look live."""
     _seed_detection(api._state["sessions"], hours_ago=5)

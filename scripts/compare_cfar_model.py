@@ -46,6 +46,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
 
+from core.areas import STUDY_AREAS  # noqa: E402
 from core.inference.runner import check_tiling, run_tiled  # noqa: E402
 from core.labeling.gfw import PASS_MARGIN  # noqa: E402
 
@@ -64,13 +65,7 @@ MODEL_TILE = 128
 MODEL_OVERLAP = 32
 DEFAULT_MODEL = Path("models/runs/kaggle-v1/local_best.onnx")
 LABEL_CHARS = set(string.ascii_letters + string.digits + "_-.")
-AREAS = {
-    "fujairah": (56.53, 25.22, 20.0),
-    "khor_fakkan": (56.52, 25.41, 20.0),
-    "sharjah_dubai": (55.33, 25.47, 20.0),
-    "ras_al_khaimah": (55.88, 26.02, 20.0),
-    "hormuz_lanes": (56.55, 26.50, 40.0),
-}
+AREAS = STUDY_AREAS
 OUT = Path("models/runs/kaggle-v1/compare")
 # Per-pass counts, in this order: true and false positives, GFW detections with
 # and without AIS, hits on each (shared by count in mixed cells), and the

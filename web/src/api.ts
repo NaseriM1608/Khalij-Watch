@@ -105,6 +105,44 @@ export interface SarDetection {
   pixel_count: number | null;
   peak_dn: number | null;
   product_name: string;
+  /** The study box it lies in; null where the detector's accuracy was never measured. */
+  study_area?: string | null;
+  /** A detector configuration measured against GFW, in a study box. */
+  tested?: boolean;
+}
+
+/** One box of one pass a detector searched (/api/analysed). */
+export interface AnalysedWindow {
+  id: number;
+  scene_id: number;
+  product_name: string;
+  satellite: string;
+  acq_time: string;
+  age_hours: number;
+  detector: string;
+  detector_version: string | null;
+  polarisation: string | null;
+  /** Detections stored now from this search; 0 is not proof that no ship was there. */
+  detections: number;
+  /** The box that was requested. */
+  bbox: BBox;
+  /** The part of the box the pass imaged, as a ring of [lon, lat]: what was searched. */
+  searched: [number, number][];
+  /** Share of the requested box that was searched (the rest lies beyond the swath). */
+  searched_share: number;
+  footprint_known: boolean;
+  /** The study box wholly containing the searched area; null otherwise. */
+  study_area: string | null;
+  /** A detector configuration measured against GFW, searching inside a study box. */
+  tested: boolean;
+}
+
+export interface AnalysedResponse {
+  generated_at: string;
+  count: number;
+  windows: AnalysedWindow[];
+  study_areas: string[];
+  attribution: string;
 }
 
 export interface DetectionsResponse {
@@ -269,6 +307,7 @@ export const api = {
   detections: (days = 14) =>
     getJson<DetectionsResponse>(`/api/detections?days=${days}`),
   darkVessels: () => getJson<EventsResponse>("/api/events?type=DARK_VESSEL"),
+  analysed: (days = 14) => getJson<AnalysedResponse>(`/api/analysed?days=${days}`),
   /**
    * Served from disk; the browser never causes a read of the radar scene itself.
    * The query names the chip's content (scene, position, cut time), so an event
@@ -326,6 +365,9 @@ export function tierOf(event: AnalystEvent): ConfidenceTier {
   const tier = event.evidence.confidence;
   return tier === "high" || tier === "medium" ? tier : "low";
 }
+
+/** Boxes a detector searched: neutral, so they never read as contacts. */
+export const ANALYSED_COLOUR = "#9fb3c8";
 
 /** Radar detections share one colour: what matters is that radar saw them. */
 export const RADAR_COLOUR = "#ffd84a";

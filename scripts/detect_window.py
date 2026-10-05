@@ -40,8 +40,15 @@ sys.path.insert(0, str(ROOT))
 import numpy as np  # noqa: E402
 
 from core.ais.landmask import PolygonLandMask, point_in_polygon  # noqa: E402
+
+# Other scripts import box_around from here.
+from core.areas import box_around  # noqa: E402
 from core.config import load_settings  # noqa: E402
-from core.db.repository import DetectionRepository, SceneRepository  # noqa: E402
+from core.db.repository import (  # noqa: E402
+    AnalysedWindowRepository,
+    DetectionRepository,
+    SceneRepository,
+)
 from core.db.session import (  # noqa: E402
     create_all,
     create_db_engine,
@@ -84,21 +91,12 @@ from core.sar.infrastructure import (  # noqa: E402
 from core.sar.reader import S3AccessError, open_measurement, read_with_retry  # noqa: E402
 from core.sar.windows import PixelWindow  # noqa: E402
 
-KM_PER_DEG_LAT = 110.54
-KM_PER_DEG_LON_EQUATOR = 111.32
 MAX_SIZE_KM = 60.0
 
 QUICKLOOK_DIR = ROOT / "data" / "quicklooks"
 DETECTION_DIR = ROOT / "data" / "detections"
 PREVIEW_MAX_SIDE = 1600
 MARKER_HALF = 7
-
-
-def box_around(lon: float, lat: float, size_km: float) -> BBox:
-    half = size_km / 2.0
-    dlat = half / KM_PER_DEG_LAT
-    dlon = half / (KM_PER_DEG_LON_EQUATOR * math.cos(math.radians(lat)))
-    return BBox(lon - dlon, lat - dlat, lon + dlon, lat + dlat)
 
 
 def latest_product_covering(lon: float, lat: float, box: BBox, days: int) -> SarProduct | None:
@@ -237,7 +235,11 @@ def store_detections(
     detector: str = "cfar",
     confidence: float = CFAR_CONFIDENCE,
 ) -> int:
-    """Record the scene, then replace this box's detections from it."""
+    """Record the scene, replace this box's detections from it, and record the box as analysed.
+
+    The window is recorded even when nothing was found: it is what lets the
+    console tell searched water from water nobody searched (PLAN §10).
+    """
     engine = create_db_engine(database_url)
     create_all(engine)
     with session_scope(make_session_factory(engine)) as session:
@@ -247,7 +249,7 @@ def store_detections(
         scene_id = scenes.id_for(product.product_id)
         if scene_id is None:
             raise RuntimeError(f"scene {product.product_id} was not recorded")
-        return DetectionRepository(session).replace_in_bbox(
+        written = DetectionRepository(session).replace_in_bbox(
             scene_id,
             box,
             detections,
@@ -256,6 +258,15 @@ def store_detections(
             detector_version=version,
             confidence=confidence,
         )
+        AnalysedWindowRepository(session).record(
+            scene_id,
+            box,
+            detector=detector,
+            detector_version=version,
+            polarisation=polarisation.upper(),
+            detections=written,
+        )
+        return written
 
 
 def run_model(args: argparse.Namespace, settings, box: BBox, product: SarProduct) -> int:
