@@ -2726,3 +2726,47 @@ Abbas had enough GFW AIS-matched detections to check the pass for an AIS gap
   of 90 kept detections); it mostly measures missing AIS, and v1 is
   conservative (hourly presence, PLAN §17 Phase 6 v1). A candidate is not a
   verdict.
+
+### 2026-10-06 - Persistent spots: fixed objects and long-moored ships
+
+The user asked for the next steps; the persistence mask came first (a plan
+change offered with its risk: it can hide ships moored for months). Decided
+before any result: the console marks detections and dark-vessel candidates
+at persistent spots and hides nothing (floating storage off Iran is exactly
+what an analyst wants to see); the thesis gets a held-out number for what
+removing them would do.
+
+- Rule (`core/persistence.py`): a spot is where the product model (score
+  >= 0.60) detected something within 150 m on at least 3 passes and on at
+  least 30% of its box's archive passes. Archive: the S1A passes before
+  2026-07-01 that were compared (UAE validation, test and 2026 H1; Iran
+  2024-25): 44 spots (Bandar Abbas 15, Sharjah 7, Bushehr 6, Fujairah 5,
+  Kharg 3, Khor Fakkan 3, Assaluyeh 2, Kish 1, Larak 1, Ras al Khaimah 1;
+  none at Jask or in the Hormuz lanes) from 9,350 detections on 225
+  area-passes (`scripts/build_persistence.py`, `data/reference/persistent_spots.json`).
+- Held out in time, on the September 2026 S1C/S1D passes (detections near a
+  spot left out for both detectors, GFW references kept, so a hidden moored
+  ship GFW reports costs recall; `compare_strata.py --spots`):
+
+| Set, scoring | Model P / R / F1 | Masked | CFAR F1, masked |
+|---|---|---|---|
+| Iran, >= 1 km from land | 0.509 / 0.909 / 0.652 | 0.523 / 0.909 / 0.664 | 0.631 -> 0.645 |
+| Iran, standard | 0.499 / 0.905 / 0.644 | 0.516 / 0.905 / 0.657 | 0.491 -> 0.506 |
+| UAE, >= 1 km from land | 0.591 / 0.924 / 0.721 | 0.595 / 0.924 / 0.724 | 0.722 -> 0.724 |
+
+  The mask removes some false alarms at no measured cost in recall
+  (neighbour-cell recall off Iran 0.961 -> 0.959), but only about 6% of the
+  model's false alarms off Iran, against the ~38% that recur at fixed spots
+  within the September and 2024-25 passes together. Most recurring spots of
+  2026 are over 1 km from any 2024-25 spot: objects or moorings that
+  appeared later, or were seen on fewer than 30% of only 12 archive passes
+  per Iranian box. A rolling archive of recent passes (as GFW does) would
+  catch more; judging it needs passes after October 2026 (not done; the rule
+  was not changed after seeing these results).
+- Console (`677e9e8`): `/api/detections` and `/api/events` carry
+  `persistent`; the detection and candidate cards say "Persistent spot:
+  something was detected within 150 m of here on N of M earlier passes ...
+  likely a fixed object ... or a ship moored for months", the feed tags it
+  and the legend counts candidates at spots. Under the rule, 9 of 486 stored
+  product detections and 1 of the 65 candidates are marked (checked in the
+  browser).
