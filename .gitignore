@@ -5,6 +5,7 @@
 
 # Data — large, regenerable, and process-and-discard by design
 data/
+!reports/data/
 models/*.onnx
 models/*.pt
 models/*.pth
@@ -21,6 +22,7 @@ __pycache__/
 .venv-train/
 .venv-kaggle/
 .venv-eval/
+.venv-docs/
 venv/
 .pytest_cache/
 .mypy_cache/
@@ -44,3 +46,15 @@ Thumbs.db
 
 # Vite
 web/.vite/
+
+# Thesis (LaTeX build outputs; Estedad fonts are downloaded, see reports/thesis/README.md)
+reports/thesis/fonts/
+reports/thesis/*.aux
+reports/thesis/*.log
+reports/thesis/*.toc
+reports/thesis/*.lot
+reports/thesis/*.lof
+reports/thesis/*.out
+reports/thesis/*.xdv
+reports/thesis/*.pdf
+reports/thesis/*.synctex.gz

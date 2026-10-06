@@ -1,0 +1,17 @@
+\begin{table}[htbp]
+\centering
+\small
+\begin{adjustbox}{max width=\textwidth}
+\begin{tabular}{lcccccc}
+\toprule
+آشکارساز & دقت & بازیابی & \lr{F1} & \lr{F1} همسایه & بازیابی با \lr{AIS} & بازیابی بدون \lr{AIS} \\
+\midrule
+\lr{CFAR} & \LRE{0٫716} & \LRE{0٫927} & \LRE{0٫808} & \LRE{0٫848} & \LRE{0٫938} & \LRE{0٫768} \\
+مدل نخست (\lr{run 1}) & \LRE{0٫688} & \LRE{0٫855} & \LRE{0٫763} & \LRE{0٫820} & \LRE{0٫879} & \LRE{0٫504} \\
+مدل نهایی (\lr{run 2}) & \LRE{0٫723} & \LRE{0٫938} & \LRE{0٫817} & \LRE{0٫854} & \LRE{0٫946} & \LRE{0٫813} \\
+\bottomrule
+\end{tabular}
+\end{adjustbox}
+\caption[آشکارسازها روی ۹۲ گذر آزمون]{آشکارسازها در برابر \lr{GFW} روی ۹۲ گذر-محدوده آزمون (قاعده «همان خانه» برای دقت، بازیابی و \lr{F1}؛ ستون «\lr{F1} همسایه» با خانه‌های همسایه).}
+\label{tab:test92}
+\end{table}

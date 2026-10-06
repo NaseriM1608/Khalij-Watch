@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import itertools
 import json
 import shutil
 import sys
@@ -79,14 +80,24 @@ def lr(text: str) -> str:
 
 
 def latex_table(
-    header: Sequence[str], rows: Sequence[Sequence[str]], *, caption: str, label: str
+    header: Sequence[str],
+    rows: Sequence[Sequence[str]],
+    *,
+    caption: str,
+    short: str,
+    label: str,
 ) -> str:
-    """A booktabs table; XePersian lays its columns out right to left."""
+    """A booktabs table; XePersian lays its columns out right to left.
+
+    ``short`` is the caption in the list of tables; a table wider than the text
+    is scaled down to fit (adjustbox ``max width``), never up.
+    """
     spec = "l" + "c" * (len(header) - 1)
     lines = [
         "\\begin{table}[htbp]",
         "\\centering",
         "\\small",
+        "\\begin{adjustbox}{max width=\\textwidth}",
         f"\\begin{{tabular}}{{{spec}}}",
         "\\toprule",
         " & ".join(header) + " \\\\",
@@ -94,7 +105,8 @@ def latex_table(
         *(" & ".join(row) + " \\\\" for row in rows),
         "\\bottomrule",
         "\\end{tabular}",
-        f"\\caption{{{caption}}}",
+        "\\end{adjustbox}",
+        f"\\caption[{short}]{{{caption}}}",
         f"\\label{{{label}}}",
         "\\end{table}",
     ]
@@ -170,6 +182,7 @@ def dataset_table(index: Path) -> tuple[str, dict[str, str]]:
             "۲۰۲۴ تا ۲۰۲۵). تقسیم بر پایه تصویر است، نه تصادفی. «مثبت بدون \\lr{AIS}» "
             "آشکارسازی‌های \\lr{GFW} بدون تطبیق \\lr{AIS} است که در مدل نهایی مثبت گرفته شد."
         ),
+        short="داده‌های آموزش، اعتبارسنجی و آزمون",
         label="tab:data",
     )
     numbers = {
@@ -220,6 +233,7 @@ def test_tables(test92: dict, test40: dict) -> tuple[str, str, dict[str, str]]:
             "آشکارسازها در برابر \\lr{GFW} روی ۹۲ گذر-محدوده آزمون (قاعده «همان خانه» برای "
             "دقت، بازیابی و \\lr{F1}؛ ستون «\\lr{F1} همسایه» با خانه‌های همسایه)."
         ),
+        short="آشکارسازها روی ۹۲ گذر آزمون",
         label="tab:test92",
     )
     labels40 = [(k, n) for k, n in labels if k in test40["table"]["same_cell"]["all"]]
@@ -227,6 +241,7 @@ def test_tables(test92: dict, test40: dict) -> tuple[str, str, dict[str, str]]:
         DETECTION_HEADER,
         detector_rows(test40, labels40),
         caption="همان سنجش روی ۴۰ گذرِ آزمونی که مقایسه از پیش بر آن توافق شده بود.",
+        short="آشکارسازها روی ۴۰ گذر آزمونِ توافق‌شده",
         label="tab:test40",
     )
     s92, n92 = test92["table"]["same_cell"]["all"], test92["table"]["neighbour_cells"]["all"]
@@ -266,7 +281,7 @@ AREA_NAMES = {
 }
 
 
-def area_table(summary: dict, *, label: str, caption: str, model: str = "run2") -> str:
+def area_table(summary: dict, *, label: str, caption: str, short: str, model: str = "run2") -> str:
     same, nb = summary["table"]["same_cell"], summary["table"]["neighbour_cells"]
     rows = []
     for area in [a for a in same if a != "all"]:
@@ -289,7 +304,7 @@ def area_table(summary: dict, *, label: str, caption: str, model: str = "run2") 
         "همسایه \\lr{CFAR}",
         "همسایه مدل",
     ]
-    return latex_table(header, rows, caption=caption, label=label)
+    return latex_table(header, rows, caption=caption, short=short, label=label)
 
 
 # Letters-only tags for the macros of each result set.
@@ -303,12 +318,13 @@ TAGS = {
 }
 
 GENERALISATION = (
-    ("compare_test", "امارات، \\lr{S1A} ۲۰۲۴–۲۰۲۵ (آزمون)"),
-    ("compare_s1a_2026h1", "امارات، \\lr{S1A} نیمه نخست ۲۰۲۶"),
-    ("compare_s1cd_2026-09", "امارات، \\lr{S1C/S1D} سپتامبر ۲۰۲۶"),
-    ("compare_iran_s1a_2024-25", "ایران، \\lr{S1A} ۲۰۲۴–۲۰۲۵"),
-    ("compare_iran_s1cd_2026-09", "ایران، \\lr{S1C/S1D} سپتامبر ۲۰۲۶"),
+    ("compare_test", "امارات، آزمون"),
+    ("compare_s1a_2026h1", "امارات، \\lr{S1A} ۲۰۲۶"),
+    ("compare_s1cd_2026-09", "امارات، \\lr{S1C/D}"),
+    ("compare_iran_s1a_2024-25", "ایران، \\lr{S1A}"),
+    ("compare_iran_s1cd_2026-09", "ایران، \\lr{S1C/D}"),
 )
+FAR = "دور از ساحل"
 
 
 def generalisation(strata: Mapping[str, dict]) -> tuple[str, list[list[object]], dict[str, str]]:
@@ -316,7 +332,7 @@ def generalisation(strata: Mapping[str, dict]) -> tuple[str, list[list[object]],
     rows, csv_rows, numbers = [], [], {}
     for key, name in GENERALISATION:
         report = strata[key]
-        for stratum, scoring in (("all", "استاندارد"), ("shore_1000m", "بیش از ۱ کیلومتر از خشکی")):
+        for stratum, scoring in (("all", "استاندارد"), ("shore_1000m", FAR)):
             summary = report[stratum]
             same = summary["table"]["same_cell"]["all"]
             boot = summary["bootstrap"]["run2"]["same_cell"]["f1"]
@@ -365,10 +381,12 @@ def generalisation(strata: Mapping[str, dict]) -> tuple[str, list[list[object]],
         rows,
         caption=(
             "تعمیم مدل نهایی (منجمد) به زمان، ماهواره‌های تازه و منطقه تازه، در برابر "
-            "\\lr{GFW} (قاعده «همان خانه»). «بیش از ۱ کیلومتر از خشکی» تنها خانه‌هایی را "
-            "می‌شمارد که \\lr{GFW} در آن‌ها آشکارسازی گزارش می‌کند. بازه‌ها با بوت‌استرپ "
-            "جفتی روی گذرها."
+            "\\lr{GFW} (قاعده «همان خانه»). آزمون و ایران \\lr{S1A}: \\lr{Sentinel-1A} "
+            "۲۰۲۴–۲۰۲۵؛ \\lr{S1A} ۲۰۲۶: نیمه نخست ۲۰۲۶؛ \\lr{S1C/D}: \\lr{Sentinel-1C/1D} "
+            "سپتامبر ۲۰۲۶. «دور از ساحل» تنها خانه‌های بیش از ۱ کیلومتر از خشکی را می‌شمارد، "
+            "که \\lr{GFW} در آن‌ها آشکارسازی گزارش می‌کند. بازه‌ها با بوت‌استرپ جفتی روی گذرها."
         ),
+        short="تعمیم به زمان، ماهواره‌های تازه و ساحل ایران",
         label="tab:generalisation",
     )
     return table, csv_rows, numbers
@@ -376,10 +394,10 @@ def generalisation(strata: Mapping[str, dict]) -> tuple[str, list[list[object]],
 
 def dark_rate_table(fusion: dict) -> tuple[str, dict[str, str]]:
     names = (
-        ("compare_val_t256", "اعتبارسنجی، \\lr{S1A} ۲۰۲۴–۲۰۲۵"),
-        ("compare_test", "آزمون، \\lr{S1A} ۲۰۲۴–۲۰۲۵"),
-        ("compare_s1a_2026h1", "\\lr{S1A} نیمه نخست ۲۰۲۶"),
-        ("compare_s1cd_2026-09", "\\lr{S1C/S1D} سپتامبر ۲۰۲۶"),
+        ("compare_val_t256", "اعتبارسنجی"),
+        ("compare_test", "آزمون"),
+        ("compare_s1a_2026h1", "\\lr{S1A} ۲۰۲۶"),
+        ("compare_s1cd_2026-09", "\\lr{S1C/D}"),
     )
     regions = (("inner_gulf", "خلیج داخلی"), ("hormuz", "هرمز"), ("gulf_of_oman", "دریای عمان"))
     rows, numbers = [], {}
@@ -408,13 +426,17 @@ def dark_rate_table(fusion: dict) -> tuple[str, dict[str, str]]:
             "آشکارسازی نگه‌داشته",
             "نرخ تاریک",
             "بازه ۹۵٪",
-            "خلیج داخلی / هرمز / دریای عمان (٪)",
+            "داخلی / هرمز / عمان (٪)",
         ],
         rows,
         caption=(
             "نرخ نامزد شناور تاریک (تلفیق خانه-ساعت با حضور ساعتی \\lr{AIS} از \\lr{GFW}، "
-            "حاشیه صفر متر که روی اعتبارسنجی برگزیده شد). بازه‌ها با بوت‌استرپ روی برداشت‌ها."
+            "حاشیه صفر متر که روی اعتبارسنجی برگزیده شد). اعتبارسنجی و آزمون: "
+            "\\lr{Sentinel-1A} ۲۰۲۴–۲۰۲۵؛ \\lr{S1A} ۲۰۲۶: نیمه نخست ۲۰۲۶؛ \\lr{S1C/D}: "
+            "\\lr{Sentinel-1C/1D} سپتامبر ۲۰۲۶. ستون آخر: خلیج داخلی، تنگه هرمز و دریای عمان. "
+            "بازه‌ها با بوت‌استرپ روی برداشت‌ها."
         ),
+        short="نرخ نامزد شناور تاریک",
         label="tab:dark",
     )
     return table, numbers
@@ -424,16 +446,18 @@ def validation_table(choice: dict) -> str:
     rows = []
     for c in choice["top10"][:6]:
         epoch = c["source_label"].split("_")[0].lstrip("e")
-        rows.append(
-            [
-                fa_num(int(epoch)),
-                f"{fa_num(c['tile'])}/{fa_num(c['overlap'])}",
-                fa_num(c["threshold"], 2),
-                fa_num(c["f1_same_cell"], 3),
-                fa_num(c["f1_neighbour_cells"], 3),
-                fa_num(c["recall_unmatched_neighbour"], 3),
-            ]
+        cells = [
+            fa_num(int(epoch)),
+            f"{fa_num(c['tile'])}/{fa_num(c['overlap'])}",
+            fa_num(c["threshold"], 2),
+            fa_num(c["f1_same_cell"], 3),
+            fa_num(c["f1_neighbour_cells"], 3),
+            fa_num(c["recall_unmatched_neighbour"], 3),
+        ]
+        chosen = all(
+            c[k] == choice["choice"][k] for k in ("source_label", "tile", "overlap", "threshold")
         )
+        rows.append([f"\\textbf{{{cell}}}" for cell in cells] if chosen else cells)
     return latex_table(
         [
             "دوره آموزش",
@@ -441,13 +465,15 @@ def validation_table(choice: dict) -> str:
             "آستانه",
             "\\lr{F1}",
             "\\lr{F1} همسایه",
-            "بازیابی بدون \\lr{AIS}",
+            "بازیابی بدون \\lr{AIS} (همسایه)",
         ],
         rows,
         caption=(
-            "انتخاب پیکربندی روی ۲۵ گذر اعتبارسنجی (هرگز روی آزمون): شش پیکربندی برتر. "
-            "سطر نخست پیکربندی برگزیده است."
+            "انتخاب پیکربندی روی ۲۵ گذر اعتبارسنجی (هرگز روی آزمون): شش پیکربندی برتر به ترتیب "
+            "میانگین \\lr{F1} دو قاعده. از پیکربندی‌هایی که تا ۰٫۰۰۵ با بهترین فاصله داشتند، آنکه "
+            "بازیابی بدون \\lr{AIS} بیشتری داشت برگزیده شد (سطر پررنگ)."
         ),
+        short="انتخاب پیکربندی روی اعتبارسنجی",
         label="tab:validation",
     )
 
@@ -460,7 +486,7 @@ def persistence_table(strata: Mapping[str, dict]) -> tuple[str, dict[str, str]]:
     ):
         for base, masked, scoring in (
             ("all", "persistent_masked", "استاندارد"),
-            ("shore_1000m", "persistent_masked_shore_1000m", "بیش از ۱ کیلومتر از خشکی"),
+            ("shore_1000m", "persistent_masked_shore_1000m", FAR),
         ):
             a = strata[key][base]["table"]["same_cell"]["all"]["run2"]
             b = strata[key][masked]["table"]["same_cell"]["all"]["run2"]
@@ -484,8 +510,9 @@ def persistence_table(strata: Mapping[str, dict]) -> tuple[str, dict[str, str]]:
         caption=(
             "اثر نقاب «نقطه‌های پایدار» (ساخته‌شده از گذرهای \\lr{S1A} پیش از تیر ۱۴۰۵) روی "
             "گذرهای سپتامبر ۲۰۲۶، جداشده در زمان: پیش ← پس از حذف آشکارسازی‌های نزدیک نقطه‌ها؛ "
-            "مرجع \\lr{GFW} دست‌نخورده می‌ماند."
+            "مرجع \\lr{GFW} دست‌نخورده می‌ماند. «دور از ساحل»: خانه‌های بیش از ۱ کیلومتر از خشکی."
         ),
+        short="اثر نقاب نقطه‌های پایدار",
         label="tab:persistence",
     )
     return table, numbers
@@ -558,6 +585,54 @@ def dark_margin_rows(fusion: dict) -> list[list[object]]:
     ]
 
 
+def _on_tile_edge(a: Sequence[float], b: Sequence[float], tol: float = 1e-3) -> bool:
+    """Whether a segment runs along a whole-degree line: where OSM land is cut into tiles.
+
+    The tiles overlap by ~0.0005 degrees, hence the tolerance.
+    """
+    return any(
+        abs(a[k] - round(a[k])) < tol
+        and abs(b[k] - round(b[k])) < tol
+        and round(a[k]) == round(b[k])
+        for k in (0, 1)
+    )
+
+
+def coast_line(ring: Sequence[Sequence[float]], spacing_deg: float = 0.03) -> list[list]:
+    """A land ring as drawable coast: tile-cut edges left out, a point every ``spacing_deg``.
+
+    Rows are [lon, lat]; ["nan", "nan"] ends a stretch (pgfplots jumps there).
+    """
+    rows: list[list] = []
+    run: list[tuple[float, float]] = []
+    tail: tuple[float, float] | None = None
+
+    def flush() -> None:
+        nonlocal run, tail
+        if tail is not None and run and tail != run[-1]:
+            run.append(tail)
+        if len(run) > 1:
+            rows.extend([round(x, 4), round(y, 4)] for x, y in run)
+            rows.append(["nan", "nan"])
+        run, tail = [], None
+
+    points = [(float(x), float(y)) for x, y in ring]
+    for a, b in itertools.pairwise(points):
+        if _on_tile_edge(a, b):
+            flush()
+            continue
+        if not run:
+            run.append(a)
+        last = run[-1]
+        if abs(b[0] - last[0]) + abs(b[1] - last[1]) >= spacing_deg:
+            run.append(b)
+            tail = None
+        else:
+            tail = b
+    flush()
+    return rows
+
+
 def coast_rows(boxes: Mapping[str, tuple[float, float, float]]) -> tuple[list, list]:
     """A simplified Gulf coastline and the measured boxes, for the study-area map."""
     from core.areas import box_around
@@ -565,13 +640,9 @@ def coast_rows(boxes: Mapping[str, tuple[float, float, float]]) -> tuple[list, l
     from core.sar.coastline import load_land
 
     gulf = BBox(47.5, 23.0, 60.0, 30.6)
-    land = [p for p in load_land(bbox=gulf) if len(p.exterior) > 200]
     coast = []
-    for polygon in land:
-        ring = polygon.exterior
-        step = max(1, len(ring) // 400)
-        coast += [[round(float(x), 4), round(float(y), 4)] for x, y in ring[::step]]
-        coast.append(["nan", "nan"])
+    for polygon in load_land(bbox=gulf):
+        coast += coast_line(polygon.exterior)
     corners = []
     for name, spec in boxes.items():
         b = box_around(*spec)
@@ -655,6 +726,7 @@ def main() -> int:
         area_table(
             test92,
             label="tab:areas-uae",
+            short="نتایج هر محدوده امارات",
             caption="مدل نهایی و \\lr{CFAR} در هر محدوده مطالعاتی امارات (۹۲ گذر آزمون).",
         ),
         encoding="utf-8",
@@ -664,6 +736,7 @@ def main() -> int:
         area_table(
             iran,
             label="tab:areas-iran",
+            short="نتایج هر محدوده ساحل ایران",
             caption=(
                 "مدل نهایی و \\lr{CFAR} در هر محدوده ساحل ایران (\\lr{S1A} ۲۰۲۴–۲۰۲۵، "
                 "خانه‌های بیش از ۱ کیلومتر از خشکی)."
