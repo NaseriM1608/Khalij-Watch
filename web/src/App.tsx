@@ -418,13 +418,15 @@ export default function App() {
           <ul className="legend searched-key">
             <li>
               <span className="box-swatch" />
-              <span className="legend-label">Searched by the model, where it was tested</span>
+              <span className="legend-label">
+                Searched by the model, where it was tested (except within 1 km of land)
+              </span>
               <span className="legend-count">{searchedCounts.tested}</span>
             </li>
             <li>
               <span className="box-swatch dashed" />
               <span className="legend-label">
-                Searched by the model, accuracy unknown here (outside the UAE study boxes)
+                Searched by the model, accuracy unknown here (outside the 12 measured boxes)
               </span>
               <span className="legend-count">{searchedCounts.untested}</span>
             </li>
@@ -772,6 +774,37 @@ function formatMetres(metres: number | null): string {
 /** An AIS presence cell is 0.01 degree: about 1 km, where the vessel was during that hour. */
 const AIS_CELL_DEG = 0.01;
 
+// Global Fishing Watch reports no vessel within about 1 km of land (core/areas.py).
+const NEAR_SHORE_M = 1000;
+const REGION_NAMES = { uae: "UAE study box", iran: "Iranian coast box" } as const;
+
+/** Whether the model's accuracy was measured where this detection lies, and what it was. */
+function testedHere(detection: SarDetection): string {
+  const accuracy = detection.accuracy;
+  if (detection.tested && accuracy) {
+    const tenths = (value: number) => Math.round(value * 10);
+    return (
+      `yes (${REGION_NAMES[accuracy.region]}, over 1 km from land): on Sentinel-1C/1D passes ` +
+      `of September 2026 about ${tenths(accuracy.precision)} in 10 of its detections matched a ` +
+      `vessel Global Fishing Watch saw, and it found about ${tenths(accuracy.recall)} in 10 of ` +
+      `those (precision ${accuracy.precision.toFixed(2)}, recall ${accuracy.recall.toFixed(2)})`
+    );
+  }
+  if (!detection.measured_area) {
+    return "no: outside the boxes where it was measured; its false alarms and misses were never measured here";
+  }
+  if (detection.shore_m == null) {
+    return "no: its distance to land is unknown, and within 1 km of land its accuracy was never measured";
+  }
+  if (detection.shore_m < NEAR_SHORE_M) {
+    return (
+      `no: ${Math.round(detection.shore_m)} m from land. Global Fishing Watch reports no ` +
+      "vessels within about 1 km of land, so the model's accuracy there was never measured"
+    );
+  }
+  return "no: this detector version was never measured against Global Fishing Watch";
+}
+
 function hourStart(iso: string): number {
   const time = new Date(iso).getTime();
   return time - (time % 3_600_000);
@@ -970,9 +1003,7 @@ function DetectionDetail({
         <div>
           <dt>Model tested here</dt>
           <dd>
-            {detection.tested
-              ? "yes (UAE study box): on test passes about 3 in 4 of its detections matched a vessel Global Fishing Watch saw, and it found over 9 in 10 of those"
-              : "no: its false alarms and misses were never measured here"}
+            {testedHere(detection)}
           </dd>
         </div>
         {detection.product_name && (

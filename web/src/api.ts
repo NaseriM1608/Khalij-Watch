@@ -105,12 +105,26 @@ export interface SarDetection {
   pixel_count: number | null;
   peak_dn: number | null;
   product_name: string;
-  /** The study box it lies in; null where the detector's accuracy was never measured. */
+  /** The UAE study box it lies in (trained, chosen and tested there); null elsewhere. */
   study_area?: string | null;
-  /** A detector configuration measured against GFW, in a study box. */
+  /** A study or Iranian box where detectors were measured against GFW; null elsewhere. */
+  measured_area?: string | null;
+  /** Metres to the nearest land (capped at a few km); null if unknown. */
+  shore_m?: number | null;
+  /** Measured accuracy: a tested detector, in a measured box, at least 1 km from land. */
+  accuracy?: DetectionAccuracy | null;
+  /** Whether ``accuracy`` applies here. */
   tested?: boolean;
   /** The detection's satellite image on disk; null until it is cut. */
   chip?: ChipImage | null;
+}
+
+/** Precision and recall measured against GFW in the detection's region (core/areas.py). */
+export interface DetectionAccuracy {
+  area: string;
+  region: "uae" | "iran";
+  precision: number;
+  recall: number;
 }
 
 /** One box of one pass a detector searched (/api/analysed). */
@@ -133,9 +147,9 @@ export interface AnalysedWindow {
   /** Share of the requested box that was searched (the rest lies beyond the swath). */
   searched_share: number;
   footprint_known: boolean;
-  /** The study box wholly containing the searched area; null otherwise. */
-  study_area: string | null;
-  /** A detector configuration measured against GFW, searching inside a study box. */
+  /** The study or Iranian box wholly containing the searched area; null otherwise. */
+  measured_area: string | null;
+  /** A detector configuration measured against GFW, searching inside a measured box. */
   tested: boolean;
 }
 
@@ -144,6 +158,7 @@ export interface AnalysedResponse {
   count: number;
   windows: AnalysedWindow[];
   study_areas: string[];
+  measured_areas: string[];
   attribution: string;
 }
 

@@ -471,6 +471,8 @@ class DetectionView:
     acq_time: dt.datetime
     satellite: str
     product_name: str
+    # Metres to land (capped, scripts/detect_window.py); None if unknown.
+    shore_m: float | None = None
 
     def age_seconds(self, now: dt.datetime) -> float:
         """Age of the observation: the age of the pass, not of the row."""
@@ -493,6 +495,7 @@ class DetectionRepository:
         detector: str,
         detector_version: str | None,
         confidence: float,
+        shore_m: Sequence[float | None] | None = None,
     ) -> int:
         """Store one window's detections, replacing any earlier run over it.
 
@@ -501,7 +504,8 @@ class DetectionRepository:
         for the same scene, channel and detector inside ``bbox``, so other
         windows and the other polarisation keep their results. Every target
         must therefore lie inside ``bbox``: one outside would survive the next
-        re-run and be duplicated by it. Returns the number of rows written.
+        re-run and be duplicated by it. ``shore_m`` gives each target's
+        distance to land (None: unknown). Returns the number of rows written.
         """
         shared = {
             "scene_id": scene_id,
@@ -511,7 +515,13 @@ class DetectionRepository:
             "confidence": confidence,
         }
         # Validate everything before deleting anything.
-        rows = [_detection_row(target, bbox, shared) for target in targets]
+        if shore_m is not None and len(shore_m) != len(targets):
+            raise ValueError(f"{len(shore_m)} distances to land for {len(targets)} detections")
+        distances = shore_m if shore_m is not None else [None] * len(targets)
+        rows = [
+            {**_detection_row(target, bbox, shared), "shore_m": _optional(float, shore)}
+            for target, shore in zip(targets, distances, strict=True)
+        ]
 
         params: dict[str, object] = dict(bbox_params(bbox))
         params.update(scene_id=scene_id, polarisation=polarisation, detector=detector)
@@ -614,7 +624,8 @@ class DetectionRepository:
 
 _DETECTION_COLUMNS = """d.id, d.scene_id, d.lon, d.lat, d.length_m, d.width_m, d.heading_deg,
                    d.confidence, d.detector, d.detector_version, d.polarisation,
-                   d.pixel_count, d.peak_dn, s.acq_time, s.satellite, s.product_name"""
+                   d.pixel_count, d.peak_dn, s.acq_time, s.satellite, s.product_name,
+                   d.shore_m"""
 
 
 def _detection_row(target: MeasuredTarget, bbox: BBox, shared: dict[str, object]) -> dict:
@@ -665,6 +676,7 @@ def _to_detection_view(row) -> DetectionView:
         acq_time=_row_timestamp(row["acq_time"]),
         satellite=row["satellite"],
         product_name=row["product_name"],
+        shore_m=row["shore_m"],
     )
 
 

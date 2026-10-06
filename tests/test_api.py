@@ -329,6 +329,10 @@ def test_every_detection_says_whether_the_detector_was_measured_where_it_lies(cl
     found = client.get("/api/detections").json()["detections"]
 
     assert {d["lat"]: d["study_area"] for d in found} == {26.5: "hormuz_lanes", 27.03: None}
+    assert {d["lat"]: d["measured_area"] for d in found} == {
+        26.5: "hormuz_lanes",
+        27.03: "bandar_abbas",
+    }
     # Seeded as CFAR version "test": not a configuration measured against GFW.
     assert {d["tested"] for d in found} == {False}
 

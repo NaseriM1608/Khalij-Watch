@@ -19,7 +19,8 @@
  * Areas a detector searched are outlined: the requested box clipped to what
  * the pass imaged. Rings come only from inside them, so empty water outside
  * reads "not searched", not "no ship"; inside, no ring is still not proof of
- * no ship. Dashed: an untested detector, or outside the five study boxes.
+ * no ship. Dashed: an untested detector, or outside the 12 measured boxes
+ * (five UAE study boxes, seven on the Iranian coast).
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -751,8 +752,8 @@ function showAnalysedPopup(
   const untested = features.some((f) => !f.properties?.tested);
   const note = document.createElement("p");
   note.textContent = untested
-    ? "Accuracy unknown: an untested detector, or outside the five UAE study boxes. Its rings may be false and it may have missed ships."
-    : "Tested here against Global Fishing Watch. Even so it misses some ships (on test passes about 1 in 5 of those GFW saw without AIS).";
+    ? "Accuracy unknown: an untested detector, or outside the 12 measured boxes (5 off the UAE, 7 off Iran). Its rings may be false and it may have missed ships."
+    : "Tested here against Global Fishing Watch, except within about 1 km of land. Even so it misses some ships (on test passes 1 in 10 to 1 in 5 of those GFW saw without AIS).";
   root.append(note);
   const absence = document.createElement("p");
   absence.textContent = "No ring is not proof of no ship.";

@@ -368,3 +368,48 @@ def test_one_detection_is_read_by_id_and_a_version_can_be_chosen(session, detect
     assert v2.lon == 56.52
     assert detections.get(v2.id) == v2
     assert detections.get(v2.id + 100) is None
+
+
+def test_each_detection_keeps_its_distance_to_land(session, detections):
+    """Accuracy near shore was never measured (GFW reports no vessel there), so it is kept per row."""
+    scene_id = add_scene(session)
+    detections.replace_in_bbox(
+        scene_id,
+        WINDOW,
+        [Target(56.5, 25.2), Target(56.45, 25.15)],
+        polarisation="VH",
+        detector="cfar",
+        detector_version="test",
+        confidence=1.0,
+        shore_m=[1234.5, None],
+    )
+    session.flush()
+
+    by_lon = {d.lon: d for d in detections.in_bbox(WINDOW)}
+
+    assert by_lon[56.5].shore_m == pytest.approx(1234.5)
+    assert by_lon[56.45].shore_m is None
+    assert detections.get(by_lon[56.5].id).shore_m == pytest.approx(1234.5)
+
+
+def test_a_detection_stored_without_a_distance_to_land_has_none(session, detections):
+    scene_id = add_scene(session)
+    store(detections, scene_id, [Target(56.5, 25.2)])
+    session.flush()
+
+    assert detections.in_bbox(WINDOW)[0].shore_m is None
+
+
+def test_distances_to_land_must_match_the_detections_one_to_one(session, detections):
+    scene_id = add_scene(session)
+    with pytest.raises(ValueError, match="distance"):
+        detections.replace_in_bbox(
+            scene_id,
+            WINDOW,
+            [Target(56.5, 25.2)],
+            polarisation="VH",
+            detector="cfar",
+            detector_version="test",
+            confidence=1.0,
+            shore_m=[100.0, 200.0],
+        )

@@ -138,16 +138,17 @@ def windows_of(client, **params) -> dict:
     }
 
 
-def test_a_search_is_tested_only_for_a_tested_detector_wholly_inside_a_study_box(client):
+def test_a_search_is_tested_only_for_a_tested_detector_wholly_inside_a_measured_box(client):
     found = windows_of(client)
     west = round(FUJAIRAH.min_lon, 2)
     product = found[("S1C_NEW", "kaggle-v2", west)]
-    assert (product["study_area"], product["tested"]) == ("fujairah", True)
+    assert (product["measured_area"], product["tested"]) == ("fujairah", True)
     assert found[("S1D_RUN1", "kaggle-v1", west)]["tested"] is False
     straddling = found[("S1C_NEW", "kaggle-v2", round(box_around(56.53, 25.22, 40.0).min_lon, 2))]
-    assert (straddling["study_area"], straddling["tested"]) == (None, False)
+    assert (straddling["measured_area"], straddling["tested"]) == (None, False)
     bandar = [w for w in found.values() if w["bbox"]["min_lat"] < 27.03 < w["bbox"]["max_lat"]]
-    assert [(w["study_area"], w["tested"]) for w in bandar] == [(None, False)]
+    # Measured against GFW since 2026-10-05 (PLAN §17, the Iranian coast).
+    assert [(w["measured_area"], w["tested"]) for w in bandar] == [("bandar_abbas", True)]
 
 
 def test_the_searched_area_stops_at_the_swath_edge(client):

@@ -166,6 +166,10 @@ class Detection(Base):
     # and for calibrating the false-alarm rate against later ground truth.
     pixel_count: Mapped[int | None] = mapped_column(Integer)
     peak_dn: Mapped[float | None] = mapped_column(Float)
+    # Metres to the nearest land, capped where land was not loaded farther out
+    # (scripts/detect_window.py): GFW reports no vessel within about 1 km of
+    # land, so a detector's accuracy there was never measured.
+    shore_m: Mapped[float | None] = mapped_column(Float)
 
     scene: Mapped[SarScene] = relationship(back_populates="detections")
     match: Mapped[FusionMatch | None] = relationship(back_populates="detection", uselist=False)

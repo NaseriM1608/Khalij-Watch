@@ -27,12 +27,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from core.areas import (
+    MEASURED_AREAS,
     PRODUCT_DETECTOR,
     PRODUCT_VERSION,
     STUDY_AREAS,
     clip_to_box,
-    inside_study_box,
+    detection_accuracy,
+    inside_measured_box,
     is_tested,
+    measured_area_of,
     ring_area,
     study_area_of,
 )
@@ -380,8 +383,10 @@ async def analysed(
     still not proof of no ship. ``searched`` is the requested box clipped to
     the pass footprint (a box can reach beyond the swath); ``tested`` is true
     only for a detector configuration measured against GFW, searching wholly
-    inside one of the five study boxes. Searches of passes with dark-vessel
-    events are included whatever their age, as those events are.
+    inside one of the measured boxes (the five study boxes and the seven
+    Iranian ones; away from the coast only - see /api/detections). Searches of
+    passes with dark-vessel events are included whatever their age, as those
+    events are.
     """
     box = _parse_bbox(bbox)
     now = dt.datetime.now(dt.UTC)
@@ -399,6 +404,7 @@ async def analysed(
         "count": len(windows),
         "windows": windows,
         "study_areas": sorted(STUDY_AREAS),
+        "measured_areas": sorted(MEASURED_AREAS),
         "attribution": "Contains modified Copernicus Sentinel data",
     }
 
@@ -414,7 +420,7 @@ def _window_to_json(window: AnalysedWindowView, now: dt.datetime) -> dict[str, A
     footprint = parse_polygon_wkt(window.footprint_wkt)
     # Without a stored footprint the box is all that is known (not expected).
     searched = clip_to_box(footprint, box) if footprint else whole
-    area = inside_study_box(searched)
+    area = inside_measured_box(searched)
     return {
         "id": window.id,
         "scene_id": window.scene_id,
@@ -430,7 +436,7 @@ def _window_to_json(window: AnalysedWindowView, now: dt.datetime) -> dict[str, A
         "searched": [[round(lon, 6), round(lat, 6)] for lon, lat in searched],
         "searched_share": round(ring_area(searched) / ring_area(whole), 3) if searched else 0.0,
         "footprint_known": bool(footprint),
-        "study_area": area,
+        "measured_area": area,
         "tested": area is not None
         and is_tested(window.detector, window.detector_version, window.polarisation),
     }
@@ -509,6 +515,14 @@ def _event_to_json(event: EventView, now: dt.datetime) -> dict[str, Any]:
 def _detection_to_json(
     detection: DetectionView, now: dt.datetime, indexes: dict[str, dict[str, float]]
 ) -> dict[str, Any]:
+    accuracy = detection_accuracy(
+        detection.lon,
+        detection.lat,
+        detection.shore_m,
+        detection.detector,
+        detection.detector_version,
+        detection.polarisation,
+    )
     return {
         "id": detection.id,
         "scene_id": detection.scene_id,
@@ -529,11 +543,16 @@ def _detection_to_json(
         "pixel_count": detection.pixel_count,
         "peak_dn": _rounded(detection.peak_dn),
         "product_name": detection.product_name,
-        # The detector was measured only in the five UAE study boxes; null elsewhere.
+        # The UAE study box it lies in (trained, chosen and tested there); null elsewhere.
         "study_area": study_area_of(detection.lon, detection.lat),
-        # A tested detector configuration, in a study box.
-        "tested": study_area_of(detection.lon, detection.lat) is not None
-        and is_tested(detection.detector, detection.detector_version, detection.polarisation),
+        # A study or Iranian box where detectors were measured against GFW; null elsewhere.
+        "measured_area": measured_area_of(detection.lon, detection.lat),
+        # Metres to land (capped at a few km); null if unknown.
+        "shore_m": None if detection.shore_m is None else round(detection.shore_m),
+        # Measured precision and recall for a tested detector configuration in a
+        # measured box at least 1 km from land (core/areas.py); null otherwise.
+        "accuracy": accuracy,
+        "tested": accuracy is not None,
         # The detection's image on disk, or null until it is cut.
         "chip": image_in_index(
             indexes.get(detection.product_name, {}), detection.lon, detection.lat

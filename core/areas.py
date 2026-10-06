@@ -1,12 +1,14 @@
-"""The five study boxes, the detectors tested in them, and the area a run searched.
+"""The boxes where detectors were measured, what they may claim there, and the area a run searched.
 
-The product model was trained, validated and tested on these five boxes off
-the UAE (2024-25, Sentinel-1A) and checked there on Sentinel-1C/1D (2026-09),
-against Global Fishing Watch and next to the CFAR baseline. Anywhere else -
-the Iranian coast, the northern Gulf - and with any other detector
-configuration, accuracy has not been measured, and the console says so. Also
-the box every detection run and comparison uses (a square of ``size_km`` on
-the ground around a centre) and the part of it a pass actually imaged.
+The product model was trained, validated and tested on five study boxes off
+the UAE (2024-25, Sentinel-1A) and checked there on Sentinel-1C/1D (2026-09);
+on 2026-10-05 it was also measured in seven Iranian boxes (PLAN §17), always
+against Global Fishing Watch and next to the CFAR baseline, and only away
+from the coast: GFW reports no vessel within about 1 km of land. Anywhere
+else, near shore, and with any other detector configuration, accuracy has
+not been measured, and the console says so. Also the box every detection
+run and comparison uses (a square of ``size_km`` on the ground around a
+centre) and the part of it a pass actually imaged.
 """
 
 from __future__ import annotations
@@ -39,16 +41,26 @@ IRAN_AREAS: dict[str, tuple[float, float, float]] = {
     "kharg": (50.30, 29.25, 20.0),
     "jask": (57.80, 25.60, 20.0),
 }
-# Detector, version and polarisation measured against GFW in the study boxes
-# (PLAN §17): run 2, the product model, on VV+VH, and the CFAR baseline on VH
-# at Pfa 1e-6. Run 1 (kaggle-v1) was measured too, lost to CFAR and was
-# superseded, so its searches do not count as tested.
+# Both are measured boxes; the Iranian ones are a held-out region.
+MEASURED_AREAS = {**STUDY_AREAS, **IRAN_AREAS}
+REGIONS = {**dict.fromkeys(STUDY_AREAS, "uae"), **dict.fromkeys(IRAN_AREAS, "iran")}
+# GFW reports no vessel within about 1 km of land: accuracy there is unmeasured.
+NEAR_SHORE_M = 1000.0
 # The product model: run 2, epoch 5 (models/point_detector_kaggle-v2.onnx).
 PRODUCT_DETECTOR = "pointdet"
 PRODUCT_VERSION = "kaggle-v2"
-TESTED_DETECTORS = frozenset(
-    {("pointdet", "kaggle-v2", "DV"), ("cfar", "L4.4-g24-t40-p1e-06-h0.25", "VH")}
-)
+# Precision and recall per region of each detector configuration measured
+# against GFW: run 2, the product model, on VV+VH, and the CFAR baseline on VH
+# at Pfa 1e-6, on the Sentinel-1C/1D passes of 2026-09 (the satellites the
+# console uses), same-cell rule, cells at least 1 km from land (PLAN §17,
+# 2026-10-05 Iranian coast; models/runs/kaggle-v2/compare_*-strata). Run 1
+# (kaggle-v1) was measured too, lost to CFAR and was superseded, so it counts
+# as untested.
+ACCURACY: dict[tuple[str, str, str], dict[str, tuple[float, float]]] = {
+    (PRODUCT_DETECTOR, PRODUCT_VERSION, "DV"): {"uae": (0.59, 0.92), "iran": (0.51, 0.91)},
+    ("cfar", "L4.4-g24-t40-p1e-06-h0.25", "VH"): {"uae": (0.59, 0.93), "iran": (0.49, 0.87)},
+}
+TESTED_DETECTORS = frozenset(ACCURACY)
 # Clipped vertices can stray past a box edge by rounding.
 EDGE_TOLERANCE_DEG = 1e-9
 
@@ -63,15 +75,45 @@ def box_around(lon: float, lat: float, size_km: float) -> BBox:
 
 
 def study_area_of(lon: float, lat: float) -> str | None:
-    """The study box a point lies in, or None where the detector was never measured."""
-    for name, (centre_lon, centre_lat, size_km) in STUDY_AREAS.items():
+    """The study box a point lies in, or None outside the five UAE boxes."""
+    return _area_of(lon, lat, STUDY_AREAS)
+
+
+def measured_area_of(lon: float, lat: float) -> str | None:
+    """The study or Iranian box a point lies in, or None where no detector was measured."""
+    return _area_of(lon, lat, MEASURED_AREAS)
+
+
+def _area_of(lon: float, lat: float, areas: dict[str, tuple[float, float, float]]) -> str | None:
+    for name, (centre_lon, centre_lat, size_km) in areas.items():
         if box_around(centre_lon, centre_lat, size_km).contains(lon, lat):
             return name
     return None
 
 
+def detection_accuracy(
+    lon: float,
+    lat: float,
+    shore_m: float | None,
+    detector: str,
+    version: str | None,
+    polarisation: str | None,
+) -> dict | None:
+    """The measured precision and recall that apply to a detection, or None.
+
+    None outside the measured boxes, within NEAR_SHORE_M of land or where the
+    distance to land is unknown, and for any untested detector configuration.
+    """
+    by_region = ACCURACY.get((detector, version, (polarisation or "").upper()))
+    area = measured_area_of(lon, lat)
+    if by_region is None or area is None or shore_m is None or shore_m < NEAR_SHORE_M:
+        return None
+    precision, recall = by_region[REGIONS[area]]
+    return {"area": area, "region": REGIONS[area], "precision": precision, "recall": recall}
+
+
 def is_tested(detector: str, version: str | None, polarisation: str | None) -> bool:
-    """Whether this detector configuration was measured against GFW (in the study boxes)."""
+    """Whether this detector configuration was measured against GFW (in the measured boxes)."""
     return (detector, version, (polarisation or "").upper()) in TESTED_DETECTORS
 
 
@@ -132,9 +174,20 @@ def ring_area(ring: Sequence[Point]) -> float:
 
 def inside_study_box(ring: Sequence[Point]) -> str | None:
     """The study box wholly containing an area, or None (also for an empty area)."""
+    return _box_containing(ring, STUDY_AREAS)
+
+
+def inside_measured_box(ring: Sequence[Point]) -> str | None:
+    """The study or Iranian box wholly containing an area, or None (also for an empty area)."""
+    return _box_containing(ring, MEASURED_AREAS)
+
+
+def _box_containing(
+    ring: Sequence[Point], areas: dict[str, tuple[float, float, float]]
+) -> str | None:
     if not ring:
         return None
-    for name, (lon, lat, size_km) in STUDY_AREAS.items():
+    for name, (lon, lat, size_km) in areas.items():
         box = box_around(lon, lat, size_km)
         if all(
             box.min_lon - EDGE_TOLERANCE_DEG <= x <= box.max_lon + EDGE_TOLERANCE_DEG

@@ -97,6 +97,8 @@ MAX_SIZE_KM = 60.0
 QUICKLOOK_DIR = ROOT / "data" / "quicklooks"
 DETECTION_DIR = ROOT / "data" / "detections"
 PREVIEW_MAX_SIDE = 1600
+# Land is loaded this far around a box; a detection farther from land keeps this.
+SHORE_REACH_M = 5000.0
 MARKER_HALF = 7
 
 
@@ -238,6 +240,22 @@ def write_geojson(
     path.write_text(json.dumps(collection, indent=1), encoding="utf-8")
 
 
+def land_around(box: BBox, reach_m: float) -> list | None:
+    """Land polygons reaching within ``reach_m`` of the box; None without the coastline file."""
+    if not COASTLINE_PATH.is_file():
+        return None
+    from core.fusion.geometry import buffer_box
+
+    return load_land(COASTLINE_PATH, bbox=buffer_box(box, reach_m))
+
+
+def shore_distances(points: Sequence[object], land: Sequence, *, reach_m: float) -> list[float]:
+    """Each point's distance to land in metres, at most ``reach_m`` (land beyond it is not loaded)."""
+    from core.fusion.prefilter import distance_to_land_m
+
+    return [min(distance_to_land_m(p.lon, p.lat, land), reach_m) for p in points]
+
+
 def store_detections(
     database_url: str | None,
     product: SarProduct,
@@ -252,8 +270,12 @@ def store_detections(
     """Record the scene, replace this box's detections from it, and record the box as analysed.
 
     The window is recorded even when nothing was found: it is what lets the
-    console tell searched water from water nobody searched (PLAN §10).
+    console tell searched water from water nobody searched (PLAN §10). Each
+    detection keeps its distance to land (unknown without the coastline file):
+    accuracy within about 1 km of land was never measured (core/areas.py).
     """
+    land = land_around(box, SHORE_REACH_M) if detections else None
+    shore = None if land is None else shore_distances(detections, land, reach_m=SHORE_REACH_M)
     engine = create_db_engine(database_url)
     create_all(engine)
     with session_scope(make_session_factory(engine)) as session:
@@ -271,6 +293,7 @@ def store_detections(
             detector=detector,
             detector_version=version,
             confidence=confidence,
+            shore_m=shore,
         )
         AnalysedWindowRepository(session).record(
             scene_id,

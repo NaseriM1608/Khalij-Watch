@@ -15,8 +15,11 @@ from core.areas import (
     STUDY_AREAS,
     box_around,
     clip_to_box,
+    detection_accuracy,
+    inside_measured_box,
     inside_study_box,
     is_tested,
+    measured_area_of,
     ring_area,
     study_area_of,
 )
@@ -158,3 +161,55 @@ def test_only_the_detector_configurations_measured_against_gfw_count_as_tested()
     assert not is_tested("pointdet", "kaggle-v1", "DV")  # run 1: superseded, lost to CFAR
     assert not is_tested("cfar", "L4.4-g24-t40-p1e-06-h0.25", "VV")  # never compared on VV
     assert not is_tested("cfar", "L4.4-g24-t40-p0.001-h0.25", "VH")
+
+
+# --------------------------------------------------------------------------
+# Measured boxes: the five study boxes and the seven Iranian ones (PLAN §17,
+# 2026-10-05), and what a detection there may claim
+# --------------------------------------------------------------------------
+
+PRODUCT = ("pointdet", "kaggle-v2", "DV")
+CFAR = ("cfar", "L4.4-g24-t40-p1e-06-h0.25", "VH")
+
+
+@pytest.mark.parametrize(
+    ("lon", "lat", "area"),
+    [
+        (56.53, 25.22, "fujairah"),
+        (56.25, 27.03, "bandar_abbas"),
+        (50.30, 29.25, "kharg"),
+        (52.00, 26.00, None),  # open Gulf, never measured
+    ],
+)
+def test_the_study_and_iranian_boxes_are_the_measured_areas(lon, lat, area):
+    assert measured_area_of(lon, lat) == area
+
+
+def test_a_searched_area_counts_as_measured_only_if_wholly_inside_one_measured_box():
+    assert inside_measured_box(box_ring(box_around(56.25, 27.03, 20.0))) == "bandar_abbas"
+    assert inside_measured_box(box_ring(BOX)) == "fujairah"
+    assert inside_measured_box(box_ring(box_around(56.25, 27.03, 40.0))) is None
+    assert inside_measured_box([]) is None
+
+
+def test_a_detection_in_a_measured_box_far_from_land_gets_its_regions_accuracy():
+    iran = detection_accuracy(56.25, 27.03, 1500.0, *PRODUCT)
+    uae = detection_accuracy(56.53, 25.22, 5000.0, *PRODUCT)
+    assert iran == {"area": "bandar_abbas", "region": "iran", "precision": 0.51, "recall": 0.91}
+    assert uae == {"area": "fujairah", "region": "uae", "precision": 0.59, "recall": 0.92}
+    assert detection_accuracy(56.25, 27.03, 1500.0, *CFAR)["precision"] == 0.49
+
+
+@pytest.mark.parametrize(
+    ("lon", "lat", "shore_m", "config"),
+    [
+        (56.25, 27.03, 999.0, PRODUCT),  # GFW reports no vessel within about 1 km of land
+        (56.25, 27.03, None, PRODUCT),  # distance to land unknown
+        (52.00, 26.00, 5000.0, PRODUCT),  # outside every measured box
+        (56.25, 27.03, 5000.0, ("pointdet", "kaggle-v1", "DV")),  # run 1, superseded
+    ],
+)
+def test_a_detection_has_no_measured_accuracy_near_shore_outside_the_boxes_or_untested(
+    lon, lat, shore_m, config
+):
+    assert detection_accuracy(lon, lat, shore_m, *config) is None
