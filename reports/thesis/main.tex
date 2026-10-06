@@ -1,0 +1,99 @@
+% Bachelor's thesis draft (Persian, XePersian). Compile with XeLaTeX from this folder:
+%   xelatex main.tex   (twice, for the table of contents and references)
+% Fonts: Estedad (fonts/, from github.com/aminabedi68/Estedad, SIL OFL).
+% Numbers, tables and chart data come from scripts/make_reports.py (../tables, ../data).
+\documentclass[12pt,a4paper,oneside]{report}
+\usepackage[top=3cm,bottom=3cm,right=3cm,left=2.5cm]{geometry}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{adjustbox}
+\usepackage{caption}
+\usepackage{pgfplots}
+\pgfplotsset{compat=1.18, table/col sep=comma}
+\usepackage[colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black]{hyperref}
+\usepackage{xepersian}
+\settextfont[Path=fonts/, BoldFont=Estedad-Bold.ttf]{Estedad-Regular.ttf}
+\setdigitfont[Path=fonts/, BoldFont=Estedad-Bold.ttf]{Estedad-Regular.ttf}
+\linespread{1.45}
+\exhyphenpenalty=10000
+\graphicspath{{../figures/}}
+\captionsetup{font=small}
+\input{../tables/numbers.tex}
+
+\begin{document}
+
+\begin{titlepage}
+\centering
+\vspace*{2cm}
+{\large [نام دانشگاه]\par}
+{\large [دانشکده و گروه]\par}
+\vspace{1.5cm}
+{\large پایان‌نامه کارشناسی\par}
+\vspace{1.5cm}
+{\LARGE\bfseries آشکارسازی شناورها در تصاویر راداری \lr{Sentinel-1} در خلیج فارس با یادگیری عمیق و یافتن شناورهای تاریک\par}
+\vspace{2cm}
+{\large نگارنده: [نام دانشجو]\par}
+\vspace{0.5cm}
+{\large استاد راهنما: [نام استاد راهنما]\par}
+\vfill
+{\large [ماه و سال]\par}
+\end{titlepage}
+
+\pagenumbering{alph}
+\chapter*{چکیده}
+خلیج فارس و تنگه هرمز از پرترددترین آبراه‌های جهان‌اند، اما سامانه شناسایی خودکار
+(\lr{AIS})، که شناورها موقعیت خود را با آن اعلام می‌کنند، خوداظهاری است: می‌توان آن را
+خاموش یا جعل کرد. تصاویر رادار روزنه مصنوعی (\lr{SAR}) ماهواره \lr{Sentinel-1} شناور را
+بی‌توجه به \lr{AIS}، ابر و شب می‌بینند. در این پژوهش یک آشکارساز نقطه‌ای یادگیری عمیق
+(رمزگذار \lr{EfficientNet-B0} و رمزگشای \lr{U-Net}) بدون برچسب‌گذاری دستی و با برچسب‌هایی
+که از آشکارسازی‌های راداری \lr{Global Fishing Watch} (\lr{GFW}) ساخته شد آموزش دید و روی
+پردازنده یک رایانه همراه اجرا شد. نخستین مدل شناورهای بدون \lr{AIS} را کمتر از روش کلاسیک
+\lr{CFAR} می‌یافت (بازیابی \darkRecallRunOne{} در برابر \darkRecallCfar)، زیرا برچسب‌ها تنها
+از شناورهای دارای \lr{AIS} آمده بود؛ افزودن آشکارسازی‌های بدون \lr{AIS} به نمونه‌های مثبت
+این سوگیری را برطرف کرد (\darkRecallModel). روی ۹۲ گذر آزمون نگه‌داشته، \lr{F1} مدل نهایی
+در برابر \lr{GFW} برابر \testFOneModel{} و \lr{CFAR} برابر \testFOneCfar{} بود (تفاضل
+\testDiff، بازه ۹۵٪: \testDiffCi). مدل بدون بازتنظیم به ماهواره‌های تازه \lr{Sentinel-1C/1D}
+و به ساحل ایران تعمیم یافت. با تلفیق آشکارسازی‌ها با حضور ساعتی \lr{AIS}، نامزدهای شناور
+تاریک همراه شواهدشان مشخص شد و همه در یک کنسول وب فارسی، هر کدام با تصویر راداری‌اش،
+نمایش داده می‌شود.
+
+\noindent\textbf{واژگان کلیدی:} رادار روزنه مصنوعی، \lr{Sentinel-1}، یادگیری عمیق،
+آشکارسازی شناور، شناور تاریک، \lr{AIS}، خلیج فارس.
+
+\tableofcontents
+\listoftables
+\listoffigures
+\cleardoublepage
+\pagenumbering{arabic}
+
+\input{chapters/01-intro}
+\input{chapters/02-background}
+\input{chapters/03-method}
+\input{chapters/04-results}
+\input{chapters/05-conclusion}
+
+\input{chapters/references}
+
+\begin{latin}
+\chapter*{Abstract}
+The Persian Gulf and the Strait of Hormuz carry some of the world's densest
+shipping, yet the Automatic Identification System (AIS) by which ships report
+their position is self-reported and can be switched off or spoofed. Sentinel-1
+synthetic aperture radar (SAR) sees vessels whatever their AIS, cloud or
+daylight. This thesis trains a deep-learning point detector (EfficientNet-B0
+encoder, U-Net decoder) on Sentinel-1 images without manual labels, using
+Global Fishing Watch (GFW) radar detections as the source of labels, and runs
+it on a laptop CPU. A first model found vessels without AIS less often than a
+classical CFAR detector, because its labels came only from AIS-broadcasting
+ships; adding GFW detections without AIS as positives removed this bias. On
+92 held-out test passes the final model reaches an F1 against GFW slightly
+above CFAR's, transfers without recalibration to the new Sentinel-1C/1D
+satellites and to the Iranian coast, and, fused with hourly AIS presence,
+flags dark-vessel candidates with their evidence. A Persian web console shows
+every detection with its radar image.
+
+\noindent\textbf{Keywords:} synthetic aperture radar, Sentinel-1, deep learning,
+ship detection, dark vessels, AIS, Persian Gulf.
+\end{latin}
+
+\end{document}
