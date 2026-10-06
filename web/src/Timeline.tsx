@@ -4,26 +4,28 @@
  * was actually observed. Clicking or dragging sets the moment the console
  * looks from ("as of"); the map then shows only what was known by then, and
  * every age is counted from it. Releasing near a pass snaps to just after
- * it, so that pass is included. "Live" returns to now.
+ * it, so that pass is included. "Live" returns to now. Time runs in the
+ * reading direction: right to left in the Persian (RTL) console.
  */
 
 import { useMemo, useRef, useState } from "react";
 import type { PointerEvent } from "react";
 import { DARK_COLOURS, RADAR_COLOUR, TimelinePass, TimelineResponse } from "./api";
+import { faDateTime, faDayMonth, faNumber } from "./fa";
 
 const AREA_LABELS: Record<string, string> = {
-  fujairah: "Fujairah",
-  khor_fakkan: "Khor Fakkan",
-  sharjah_dubai: "Sharjah / Dubai",
-  ras_al_khaimah: "Ras al Khaimah",
-  hormuz_lanes: "Hormuz lanes",
-  bandar_abbas: "Bandar Abbas",
-  larak_hormuz: "Larak / Hormuz",
-  kish: "Kish",
-  assaluyeh: "Assaluyeh",
-  bushehr: "Bushehr",
-  kharg: "Kharg",
-  jask: "Jask",
+  fujairah: "فجیره",
+  khor_fakkan: "خورفکان",
+  sharjah_dubai: "شارجه / دبی",
+  ras_al_khaimah: "راس‌الخیمه",
+  hormuz_lanes: "آبراه هرمز",
+  bandar_abbas: "بندرعباس",
+  larak_hormuz: "لارک / هرمز",
+  kish: "کیش",
+  assaluyeh: "عسلویه",
+  bushehr: "بوشهر",
+  kharg: "خارک",
+  jask: "جاسک",
 };
 const IMAGED_COLOUR = "#5d6b80";
 // Releasing within this many pixels of a pass snaps to it.
@@ -41,17 +43,13 @@ function passColour(pass: TimelinePass): string {
 }
 
 function describe(area: string, pass: TimelinePass): string {
-  const when = `${pass.acq_time.slice(0, 16).replace("T", " ")} UTC`;
+  const when = faDateTime(pass.acq_time);
   const what = pass.fused
-    ? `searched (${pass.detections} detections), dark-vessel candidates`
+    ? `جست‌وجو‌شده (${faNumber(pass.detections)} آشکارسازی)، نامزد شناور تاریک`
     : pass.searched
-      ? `searched by the model (${pass.detections} detections)`
-      : "imaged, not searched";
+      ? `جست‌وجو با مدل (${faNumber(pass.detections)} آشکارسازی)`
+      : "تصویربرداری‌شده، جست‌وجو نشده";
   return `${AREA_LABELS[area] ?? area} · ${pass.satellite} ${when} · ${what}`;
-}
-
-function formatMoment(ms: number): string {
-  return `${new Date(ms).toISOString().slice(0, 16).replace("T", " ")} UTC`;
 }
 
 export function Timeline({
@@ -90,9 +88,13 @@ export function Timeline({
   const share = (ms: number) => Math.min(1, Math.max(0, (ms - span.start) / width));
 
   const momentAt = (clientX: number, snap: boolean): number => {
-    const box = barRef.current?.getBoundingClientRect();
-    if (!box) return span.end;
-    const ms = span.start + ((clientX - box.left) / box.width) * width;
+    const bar = barRef.current;
+    const box = bar?.getBoundingClientRect();
+    if (!bar || !box) return span.end;
+    // Time runs from the inline start: the right edge in RTL.
+    const rtl = getComputedStyle(bar).direction === "rtl";
+    const fromStart = rtl ? box.right - clientX : clientX - box.left;
+    const ms = span.start + (fromStart / box.width) * width;
     if (!snap) return ms;
     let best: number | null = null;
     for (const t of passTimes) {
@@ -118,28 +120,29 @@ export function Timeline({
   };
 
   const cursor = dragging ?? (asOf ? Date.parse(asOf) : span.end);
-  const looking = asOf ? `As of ${formatMoment(Date.parse(asOf))}` : "Live";
+  const looking = asOf ? `در لحظه ${faDateTime(asOf)}` : "اکنون (زنده)";
 
   return (
-    <section className={`timeline ${collapsed ? "collapsed" : ""}`} aria-label="Timeline of radar passes">
+    <section className={`timeline ${collapsed ? "collapsed" : ""}`} aria-label="خط زمان گذرهای راداری">
       <header className="timeline-head">
         <button className="link" onClick={() => setCollapsed((c) => !c)}>
-          {collapsed ? "Show timeline" : "Hide timeline"}
+          {collapsed ? "نمایش خط زمان" : "پنهان کردن خط زمان"}
         </button>
         <span className="timeline-title">
-          Stored radar passes over each box, last {data.days} days: drag to look back in time
+          گذرهای راداری ذخیره‌شده بر فراز هر محدوده، {faNumber(data.days)} روز اخیر: برای
+          نگاه به گذشته بکشید
         </span>
         <span className="timeline-key">
-          <i style={{ background: IMAGED_COLOUR }} /> imaged
-          <i style={{ background: RADAR_COLOUR }} /> searched by the model
-          <i style={{ background: DARK_COLOURS.high }} /> dark-vessel candidates
+          <i style={{ background: IMAGED_COLOUR }} /> تصویربرداری‌شده
+          <i style={{ background: RADAR_COLOUR }} /> جست‌وجو با مدل
+          <i style={{ background: DARK_COLOURS.high }} /> نامزد شناور تاریک
         </span>
         <strong className={asOf ? "as-of past" : "as-of"}>
-          {dragging !== null ? formatMoment(dragging) : looking}
+          {dragging !== null ? faDateTime(dragging) : looking}
         </strong>
         {asOf && (
           <button className="live" onClick={() => onChange(null)}>
-            Live
+            اکنون
           </button>
         )}
       </header>
@@ -160,8 +163,8 @@ export function Timeline({
             onPointerUp={onPointerUp}
           >
             {days.map((t) => (
-              <span key={t} className="timeline-day" style={{ left: `${share(t) * 100}%` }}>
-                {new Date(t).toISOString().slice(5, 10)}
+              <span key={t} className="timeline-day" style={{ insetInlineStart: `${share(t) * 100}%` }}>
+                {faDayMonth(t)}
               </span>
             ))}
             {data.areas.map((area, row) => (
@@ -170,14 +173,17 @@ export function Timeline({
                   <span
                     key={pass.scene_id}
                     className="timeline-tick"
-                    style={{ left: `${share(Date.parse(pass.acq_time)) * 100}%`, background: passColour(pass) }}
+                    style={{
+                      insetInlineStart: `${share(Date.parse(pass.acq_time)) * 100}%`,
+                      background: passColour(pass),
+                    }}
                     title={describe(area.name, pass)}
                   />
                 ))}
               </div>
             ))}
-            <div className="timeline-future" style={{ left: `${share(cursor) * 100}%` }} />
-            <div className="timeline-cursor" style={{ left: `${share(cursor) * 100}%` }} />
+            <div className="timeline-future" style={{ insetInlineStart: `${share(cursor) * 100}%` }} />
+            <div className="timeline-cursor" style={{ insetInlineStart: `${share(cursor) * 100}%` }} />
           </div>
         </div>
       )}

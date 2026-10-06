@@ -35,14 +35,14 @@ export interface AnomalyFlag {
 }
 
 export const ANOMALY_LABELS: Record<string, string> = {
-  ON_LAND: "Position on land",
-  TELEPORT: "Teleported between fixes",
-  IMPOSSIBLE_SPEED: "Impossible speed",
-  IMPOSSIBLE_TURN: "Impossible turn rate",
-  SPEED_MISMATCH: "Speed contradicts track",
-  DUPLICATE_IDENTITY: "Identity in two places",
-  COLLINEAR_TRACK: "Track impossibly straight",
-  MID_REGION_MISMATCH: "Flag inconsistent with position",
+  ON_LAND: "موقعیت روی خشکی",
+  TELEPORT: "جهش ناممکن میان دو گزارش",
+  IMPOSSIBLE_SPEED: "سرعت ناممکن",
+  IMPOSSIBLE_TURN: "نرخ چرخش ناممکن",
+  SPEED_MISMATCH: "سرعت با مسیر نمی‌خواند",
+  DUPLICATE_IDENTITY: "یک هویت در دو جا",
+  COLLINEAR_TRACK: "مسیر به‌طرز ناممکنی مستقیم",
+  MID_REGION_MISMATCH: "پرچم با موقعیت نمی‌خواند",
 };
 
 export interface VesselsResponse {
@@ -445,9 +445,9 @@ export const DARK_COLOURS: Record<ConfidenceTier, string> = {
 };
 
 export const DARK_TIER_LABELS: Record<ConfidenceTier, string> = {
-  high: "High: dark even with a 2 km margin",
-  medium: "Medium: dark with a 0.5 km margin, not with 2 km",
-  low: "Low: within 0.5 km of an AIS vessel's gate",
+  high: "زیاد: حتی با حاشیه ۲ کیلومتری تاریک",
+  medium: "متوسط: با حاشیه ۰٫۵ کیلومتری تاریک، با ۲ کیلومتر نه",
+  low: "کم: تا ۰٫۵ کیلومتری دروازه یک شناور AIS",
 };
 
 export function tierOf(event: AnalystEvent): ConfidenceTier {
@@ -470,15 +470,6 @@ export function coverageColour(ageHours: number): string {
 }
 
 /** Human-readable age. The UI states this rather than implying freshness. */
-export function formatAge(seconds: number): string {
-  if (seconds < 60) return `${Math.round(seconds)}s ago`;
-  const minutes = Math.floor(seconds / 60);
-  if (minutes < 60) return `${minutes}m ago`;
-  const hours = Math.floor(minutes / 60);
-  if (hours < 24) return `${hours}h ${minutes % 60}m ago`;
-  return `${Math.floor(hours / 24)}d ${hours % 24}h ago`;
-}
-
 export const CLASS_COLOURS: Record<CoarseClass | "unknown", string> = {
   cargo_tanker: "#4aa3ff",
   fishing: "#5fd08a",
@@ -488,11 +479,11 @@ export const CLASS_COLOURS: Record<CoarseClass | "unknown", string> = {
 };
 
 export const CLASS_LABELS: Record<CoarseClass | "unknown", string> = {
-  cargo_tanker: "Cargo / Tanker",
-  fishing: "Fishing",
-  service_tug: "Service / Tug",
-  passenger_other: "Passenger / Other",
-  unknown: "Unidentified",
+  cargo_tanker: "باری / نفتکش",
+  fishing: "ماهیگیری",
+  service_tug: "خدماتی / یدک‌کش",
+  passenger_other: "مسافری / سایر",
+  unknown: "شناسایی‌نشده",
 };
 
 export function classOf(vessel: Vessel): CoarseClass | "unknown" {

@@ -25,6 +25,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap } from "maplibre-gl";
+import { faAge, faDateTime, faNumber } from "./fa";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   ANALYSED_COLOUR,
@@ -39,7 +40,6 @@ import {
   Vessel,
   classOf,
   coverageColour,
-  formatAge,
   tierOf,
 } from "./api";
 
@@ -123,7 +123,7 @@ function toAnalysedFeatures(windows: AnalysedWindow[]): GeoJSON.FeatureCollectio
         },
         properties: {
           tested: window.tested,
-          pass: `${window.satellite} ${window.acq_time.slice(0, 16).replace("T", " ")} UTC`,
+          pass: `${window.satellite} ${faDateTime(window.acq_time)}`,
           ageHours: window.age_hours,
           detections: window.detections,
           detector: [window.detector, window.detector_version, window.polarisation]
@@ -729,20 +729,20 @@ function showAnalysedPopup(
   const root = document.createElement("div");
   root.className = "radar-popup";
   const title = document.createElement("strong");
-  title.textContent = "Searched once, at the pass time";
+  title.textContent = "یک بار جست‌وجو شده، در لحظه گذر";
   root.append(title);
   for (const feature of features) {
     const properties = feature.properties ?? {};
     const row = document.createElement("div");
     const name = document.createElement("span");
-    name.textContent = `${properties.pass ?? ""} · ${formatAge(Number(properties.ageHours) * 3600)}`;
+    name.textContent = `${properties.pass ?? ""} · ${faAge(Number(properties.ageHours) * 3600)}`;
     const text = document.createElement("span");
     const count = Number(properties.detections);
     const share = Number(properties.share);
     text.textContent = [
-      `${count} detection${count === 1 ? "" : "s"} · ${properties.detector ?? ""}`,
-      share < 0.99 ? `${Math.round(share * 100)}% of the box imaged` : "",
-      properties.tested ? "tested here" : "accuracy unknown",
+      `${faNumber(count)} آشکارسازی · ${properties.detector ?? ""}`,
+      share < 0.99 ? `${faNumber(share * 100)}٪ از محدوده تصویربرداری شده` : "",
+      properties.tested ? "اینجا آزموده شده" : "دقت نامعلوم",
     ]
       .filter(Boolean)
       .join(" · ");
@@ -752,11 +752,11 @@ function showAnalysedPopup(
   const untested = features.some((f) => !f.properties?.tested);
   const note = document.createElement("p");
   note.textContent = untested
-    ? "Accuracy unknown: an untested detector, or outside the 12 measured boxes (5 off the UAE, 7 off Iran). Its rings may be false and it may have missed ships."
-    : "Tested here against Global Fishing Watch, except within about 1 km of land. Even so it misses some ships (on test passes 1 in 10 to 1 in 5 of those GFW saw without AIS).";
+    ? "دقت نامعلوم: آشکارسازی آزموده‌نشده، یا بیرون از ۱۲ محدوده سنجیده (۵ در امارات، ۷ در ایران). حلقه‌هایش ممکن است نادرست باشند و ممکن است کشتی‌هایی را از دست داده باشد."
+    : "اینجا با Global Fishing Watch آزموده شده، جز تا حدود ۱ کیلومتری خشکی. با این حال برخی کشتی‌ها را از دست می‌دهد (در گذرهای آزمون ۱ از ۱۰ تا ۱ از ۵ کشتیِ بدون AIS که GFW دیده بود).";
   root.append(note);
   const absence = document.createElement("p");
-  absence.textContent = "No ring is not proof of no ship.";
+  absence.textContent = "نبودِ حلقه اثبات نبودِ کشتی نیست.";
   root.append(absence);
   new maplibregl.Popup({ maxWidth: "300px" }).setLngLat(at).setDOMContent(root).addTo(instance);
 }

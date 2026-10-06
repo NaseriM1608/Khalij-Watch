@@ -39,9 +39,9 @@ import {
   chipPixel,
   classOf,
   coverageColour,
-  formatAge,
   tierOf,
 } from "./api";
+import { faAge, faCoord, faDate, faDateTime, faMetres, faNumber, faTime } from "./fa";
 
 const REFRESH_MS = 5000;
 // Detections change only when a detection job runs, so poll gently.
@@ -331,25 +331,25 @@ export default function App() {
       <aside className="rail">
         <header className="brand">
           <h1>khalij-watch</h1>
-          <p>Persian Gulf · maritime domain awareness</p>
+          <p>خلیج فارس · آگاهی از وضعیت دریایی</p>
         </header>
 
         {isSynthetic && (
           <div className="banner banner-warn">
-            <strong>Synthetic data</strong>
+            <strong>داده‌های ساختگی</strong>
             <span>
-              No live AIS feed is configured. Everything on this map is
-              simulated and is <em>not</em> a real observation.
+              هیچ خوراک زنده AIS پیکربندی نشده است. همه چیز روی این نقشه
+              شبیه‌سازی‌شده است و مشاهده واقعی <em>نیست</em>.
             </span>
           </div>
         )}
 
         <section className="panel">
-          <h2>Reported position integrity</h2>
+          <h2>درستی موقعیت‌های گزارش‌شده</h2>
           <p className="hint">
-            AIS is self-reported and, in this region, frequently falsified.
-            Doubted contacts are kept and marked, never discarded &mdash; a
-            fabricated track is itself evidence.
+            AIS را خود شناورها گزارش می‌کنند و در این منطقه اغلب جعل می‌شود.
+            موقعیت‌های مشکوک نگه داشته و علامت‌گذاری می‌شوند، هرگز حذف
+            نمی‌شوند &mdash; یک مسیر ساختگی خود یک شاهد است.
           </p>
           <label className="legend">
             <span
@@ -360,18 +360,18 @@ export default function App() {
                 checked={suspectOnly}
                 onChange={() => setSuspectOnly((v) => !v)}
               />
-              <span className="legend-label">Show only doubted contacts</span>
-              <span className="legend-count">{suspectCount}</span>
+              <span className="legend-label">فقط موقعیت‌های مشکوک</span>
+              <span className="legend-count">{faNumber(suspectCount)}</span>
             </span>
           </label>
         </section>
 
         <section className="panel">
-          <h2>Radar coverage</h2>
+          <h2>پوشش راداری</h2>
           <p className="hint">
-            Sentinel-1 is not live. It sees everything, including vessels that
-            broadcast nothing &mdash; but only when a satellite passes. Where
-            the map is unshaded, nothing has looked recently.
+            Sentinel-1 زنده نیست. همه چیز را می‌بیند، حتی شناورهایی که هیچ
+            سیگنالی نمی‌فرستند &mdash; اما فقط هنگام گذر ماهواره. هر جا نقشه
+            سایه ندارد، اخیراً تصویری گرفته نشده است.
           </p>
           <label className="legend">
             <span className="suspect-row">
@@ -380,16 +380,16 @@ export default function App() {
                 checked={showCoverage}
                 onChange={() => setShowCoverage((v) => !v)}
               />
-              <span className="legend-label">Show radar footprints</span>
-              <span className="legend-count">{coverage?.count ?? 0}</span>
+              <span className="legend-label">نمایش محدوده تصاویر راداری</span>
+              <span className="legend-count">{faNumber(coverage?.count ?? 0)}</span>
             </span>
           </label>
           <ul className="legend coverage-key">
             {[
-              [12, "under 12h"],
-              [48, "12h – 2d"],
-              [120, "2 – 5d"],
-              [999, "over 5d"],
+              [12, "کمتر از ۱۲ ساعت"],
+              [48, "۱۲ ساعت تا ۲ روز"],
+              [120, "۲ تا ۵ روز"],
+              [999, "بیش از ۵ روز"],
             ].map(([hours, label]) => (
               <li key={String(label)}>
                 <span
@@ -402,12 +402,12 @@ export default function App() {
           </ul>
           {coverage?.last_look && (
             <p className="hint last-look">
-              Last radar look{" "}
-              {formatAge(
+              آخرین تصویر راداری{" "}
+              {faAge(
                 ((asOf ? Date.parse(asOf) : Date.now()) - new Date(coverage.last_look).getTime()) /
                   1000,
               )}
-              {asOf ? " (as of the timeline)" : ""}
+              {asOf ? " (در لحظه خط زمان)" : ""}
               {coverage.satellites.length > 0 &&
                 ` · ${coverage.satellites.join(", ")}`}
             </p>
@@ -415,15 +415,15 @@ export default function App() {
         </section>
 
         <section className="panel">
-          <h2>Vessels in satellite images</h2>
+          <h2>شناورها در تصاویر ماهواره‌ای</h2>
           <p className="hint">
-            Yellow rings are the deep-learning model&rsquo;s detections in
-            Sentinel-1 radar satellite images, whether or not they broadcast
-            anything: most are vessels, some are false alarms. Click one to see
-            it in its image. Each is a snapshot from one pass, not a live
-            position; passes fused with AIS mark their dark-vessel candidates
-            separately (below). The CFAR baseline and the superseded first model
-            are not shown here.
+            حلقه‌های زرد آشکارسازی‌های مدل یادگیری عمیق در تصاویر راداری
+            ماهواره Sentinel-1 هستند، چه شناور سیگنالی بفرستد چه نه: بیشترشان
+            شناورند و برخی هشدار نادرست. روی یکی کلیک کنید تا آن را در تصویرش
+            ببینید. هر کدام تصویری لحظه‌ای از یک گذر است، نه موقعیت زنده؛ در
+            گذرهایی که با AIS تلفیق شده‌اند نامزدهای شناور تاریک جداگانه
+            علامت خورده‌اند (پایین‌تر). خط مبنای CFAR و مدل نخستِ کنارگذاشته‌شده
+            اینجا نمایش داده نمی‌شوند.
           </p>
           <label className="legend">
             <span className="suspect-row">
@@ -437,37 +437,38 @@ export default function App() {
               />
               <span className="ring" style={{ borderColor: RADAR_COLOUR }} />
               <span className="legend-label">
-                Show last {RADAR_LOOKBACK_DAYS} days
+                نمایش {faNumber(RADAR_LOOKBACK_DAYS)} روز اخیر
               </span>
-              <span className="legend-count">{radar?.count ?? 0}</span>
+              <span className="legend-count">{faNumber(radar?.count ?? 0)}</span>
             </span>
           </label>
           {analysedError ? (
             <p className="hint">
-              The areas detectors searched could not be loaded, so the map
-              cannot show where no ring means not searched.
+              ناحیه‌هایی که آشکارسازها جست‌وجو کرده‌اند بارگیری نشد، پس نقشه
+              نمی‌تواند نشان دهد کجا نبودِ حلقه یعنی جست‌وجو نشده.
             </p>
           ) : (
             <p className="hint">
-              Rings come only from the outlined areas a detector searched, once
-              per pass. Outside them, no ring means not searched. Inside, no
-              ring is not proof of no ship either: detectors miss some vessels.
+              حلقه‌ها فقط از ناحیه‌های قاب‌گرفته‌ای می‌آیند که آشکارساز در هر
+              گذر یک بار جست‌وجو کرده است. بیرون از آن‌ها نبودِ حلقه یعنی جست‌وجو
+              نشده. درون آن‌ها هم نبودِ حلقه اثبات نبودِ کشتی نیست: آشکارسازها
+              برخی شناورها را از دست می‌دهند.
             </p>
           )}
           <ul className="legend searched-key">
             <li>
               <span className="box-swatch" />
               <span className="legend-label">
-                Searched by the model, where it was tested (except within 1 km of land)
+                جست‌وجو با مدل، جایی که آزموده شده (جز تا ۱ کیلومتری خشکی)
               </span>
-              <span className="legend-count">{searchedCounts.tested}</span>
+              <span className="legend-count">{faNumber(searchedCounts.tested)}</span>
             </li>
             <li>
               <span className="box-swatch dashed" />
               <span className="legend-label">
-                Searched by the model, accuracy unknown here (outside the 12 measured boxes)
+                جست‌وجو با مدل، دقت اینجا نامعلوم (بیرون از ۱۲ محدوده سنجیده)
               </span>
-              <span className="legend-count">{searchedCounts.untested}</span>
+              <span className="legend-count">{faNumber(searchedCounts.untested)}</span>
             </li>
           </ul>
           {radarError && <p className="error">{radarError}</p>}
@@ -475,14 +476,14 @@ export default function App() {
         </section>
 
         <section className="panel">
-          <h2>Dark-vessel candidates</h2>
+          <h2>نامزدهای شناور تاریک</h2>
           <p className="hint">
-            Radar detections that no AIS vessel&rsquo;s hourly track reaches,
-            from Global Fishing Watch AIS presence. Fused in batch days after a
-            pass. A candidate, not a verdict: reception gaps, jamming and the
-            hourly sampling can make an AIS ship look dark. Only passes already
-            fused carry candidates; elsewhere no red ring means not checked,
-            not clear.
+            آشکارسازی‌های راداری که مسیر ساعتیِ هیچ شناور AIS به آن‌ها نمی‌رسد،
+            بر پایه حضور AIS از Global Fishing Watch. تلفیق چند روز پس از هر گذر
+            به‌صورت دسته‌ای انجام می‌شود. نامزد است، نه حکم: شکاف دریافت، اخلال و
+            نمونه‌برداری ساعتی می‌توانند کشتیِ دارای AIS را تاریک نشان دهند. فقط
+            گذرهای تلفیق‌شده نامزد دارند؛ جاهای دیگر نبودِ حلقه قرمز یعنی بررسی
+            نشده، نه پاک.
           </p>
           <label className="legend">
             <span className="suspect-row">
@@ -495,8 +496,8 @@ export default function App() {
                 }}
               />
               <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS.medium }} />
-              <span className="legend-label">Show candidates</span>
-              <span className="legend-count">{dark?.count ?? 0}</span>
+              <span className="legend-label">نمایش نامزدها</span>
+              <span className="legend-count">{faNumber(dark?.count ?? 0)}</span>
             </span>
           </label>
           <ul className="legend tier-key">
@@ -504,19 +505,19 @@ export default function App() {
               <li key={tier}>
                 <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS[tier] }} />
                 <span className="legend-label">{DARK_TIER_LABELS[tier]}</span>
-                <span className="legend-count">{darkCounts.get(tier) ?? 0}</span>
+                <span className="legend-count">{faNumber(darkCounts.get(tier) ?? 0)}</span>
               </li>
             ))}
           </ul>
           {darkAtSpots > 0 && (
             <p className="hint">
-              {darkAtSpots} of them {darkAtSpots === 1 ? "lies" : "lie"} at persistent spots,
-              where something was detected on many earlier passes: likely fixed objects or ships
-              moored for months (marked on their cards).
+              {faNumber(darkAtSpots)} مورد از آن‌ها در نقطه‌های پایدار است، جایی که در
+              بسیاری از گذرهای پیشین چیزی آشکار شده: احتمالاً سازه‌های ثابت یا کشتی‌هایی
+              که ماه‌ها لنگر انداخته‌اند (روی کارت‌هایشان علامت خورده‌اند).
             </p>
           )}
           {showDark && feed.length > 0 && (
-            <ol className="dark-feed" aria-label="Dark-vessel candidates, newest pass first">
+            <ol className="dark-feed" aria-label="نامزدهای شناور تاریک، جدیدترین گذر نخست">
               {feed.map((event) => (
                 <li key={event.id}>
                   <button
@@ -529,15 +530,15 @@ export default function App() {
                     />
                     <span className="feed-text">
                       <span>
-                        {event.ts.slice(0, 16).replace("T", " ")} UTC ·{" "}
-                        {formatAge(event.age_hours * 3600)}
+                        {faDateTime(event.ts)} ·{" "}
+                        {faAge(event.age_hours * 3600)}
                       </span>
                       <span className="feed-sub">
-                        {event.lat?.toFixed(3)}°, {event.lon?.toFixed(3)}° ·{" "}
+                        {faNumber(event.lat ?? 0, 3)}°، {faNumber(event.lon ?? 0, 3)}° ·{" "}
                         {event.evidence.gate.nearest_gap_m == null
-                          ? "no AIS vessel near"
-                          : `${Math.round(event.evidence.gate.nearest_gap_m)} m outside nearest AIS gate`}
-                        {event.persistent ? " · persistent spot" : ""}
+                          ? "هیچ شناور AIS نزدیک نیست"
+                          : `${faMetres(event.evidence.gate.nearest_gap_m)} بیرون از نزدیک‌ترین دروازه AIS`}
+                        {event.persistent ? " · نقطه پایدار" : ""}
                       </span>
                     </span>
                   </button>
@@ -547,17 +548,18 @@ export default function App() {
           )}
           {(dark?.count ?? 0) > FEED_LENGTH && (
             <p className="hint">
-              Showing the {FEED_LENGTH} newest of {dark?.count}; all are on the map.
+              {faNumber(FEED_LENGTH)} مورد جدیدتر از {faNumber(dark?.count ?? 0)} نمایش داده
+              شده؛ همه روی نقشه هستند.
             </p>
           )}
           {darkError && <p className="error">{darkError}</p>}
         </section>
 
         <section className="panel">
-          <h2>Vessel classes</h2>
+          <h2>رده‌های شناور</h2>
           <p className="hint">
-            Class comes from AIS, not from imagery. Radar cannot tell a tanker
-            from a bulk carrier at 10 m.
+            رده از AIS می‌آید، نه از تصویر. رادار با تفکیک ۱۰ متر نفتکش را از
+            فله‌بر تشخیص نمی‌دهد.
           </p>
           <ul className="legend">
             {ALL_CLASSES.map((key) => (
@@ -573,7 +575,7 @@ export default function App() {
                     style={{ background: CLASS_COLOURS[key] }}
                   />
                   <span className="legend-label">{CLASS_LABELS[key]}</span>
-                  <span className="legend-count">{counts.get(key) ?? 0}</span>
+                  <span className="legend-count">{faNumber(counts.get(key) ?? 0)}</span>
                 </label>
               </li>
             ))}
@@ -581,10 +583,10 @@ export default function App() {
         </section>
 
         <section className="panel">
-          <h2>Contact age</h2>
+          <h2>عمر موقعیت‌ها</h2>
           <p className="hint">
-            Older contacts fade on the map. Nothing here is a live radar
-            picture.
+            موقعیت‌های قدیمی‌تر روی نقشه کم‌رنگ می‌شوند. هیچ چیز اینجا تصویر
+            راداری زنده نیست.
           </p>
           <label className="slider">
             <input
@@ -596,46 +598,47 @@ export default function App() {
               onChange={(e) => setMaxAgeMinutes(Number(e.target.value))}
             />
             <span>
-              showing last{" "}
+              نمایش{" "}
               {maxAgeMinutes >= 60
-                ? `${Math.floor(maxAgeMinutes / 60)}h`
-                : `${maxAgeMinutes}m`}
+                ? `${faNumber(Math.floor(maxAgeMinutes / 60))} ساعت`
+                : `${faNumber(maxAgeMinutes)} دقیقه`}{" "}
+              اخیر
             </span>
           </label>
         </section>
 
         <section className="panel">
-          <h2>Status</h2>
+          <h2>وضعیت</h2>
           <dl className="stats">
             <div>
-              <dt>Showing</dt>
-              <dd>{visible.length.toLocaleString()}</dd>
+              <dt>در حال نمایش</dt>
+              <dd>{faNumber(visible.length)}</dd>
             </div>
             <div>
-              <dt>Known vessels</dt>
-              <dd>{health?.vessels.toLocaleString() ?? "—"}</dd>
+              <dt>شناورهای شناخته‌شده</dt>
+              <dd>{health ? faNumber(health.vessels) : "—"}</dd>
             </div>
             <div>
-              <dt>Positions</dt>
-              <dd>{health?.positions.toLocaleString() ?? "—"}</dd>
+              <dt>موقعیت‌ها</dt>
+              <dd>{health ? faNumber(health.positions) : "—"}</dd>
             </div>
             <div>
-              <dt>Radar scenes</dt>
-              <dd>{health?.sar_scenes.toLocaleString() ?? "—"}</dd>
+              <dt>تصاویر راداری</dt>
+              <dd>{health ? faNumber(health.sar_scenes) : "—"}</dd>
             </div>
             <div>
-              <dt>Detections stored (all detectors)</dt>
-              <dd>{health?.detections.toLocaleString() ?? "—"}</dd>
+              <dt>آشکارسازی‌های ذخیره‌شده (همه آشکارسازها)</dt>
+              <dd>{health ? faNumber(health.detections) : "—"}</dd>
             </div>
             <div>
-              <dt>Live feeds</dt>
-              <dd>{health?.live_feeds.length ? health.live_feeds.join(", ") : "none"}</dd>
+              <dt>خوراک‌های زنده</dt>
+              <dd>{health?.live_feeds.length ? health.live_feeds.join("، ") : "هیچ"}</dd>
             </div>
           </dl>
           {error && <p className="error">{error}</p>}
         </section>
 
-        <footer className="attribution">
+        <footer className="attribution" dir="ltr">
           Source: {attribution.length ? attribution.join(", ") : "—"}
           <br />
           Contains modified Copernicus Sentinel data.
@@ -694,10 +697,10 @@ export default function App() {
           <VesselDetail vessel={selectedVessel} track={track} onClose={() => setSelected(null)} />
         ) : (
           <div className="empty">
-            <h2>No contact selected</h2>
+            <h2>موردی انتخاب نشده</h2>
             <p>
-              Click a yellow ring to see the vessel in its satellite image, or a
-              red or orange ring to see why it was called dark.
+              روی یک حلقه زرد کلیک کنید تا شناور را در تصویر ماهواره‌ای‌اش ببینید،
+              یا روی حلقه قرمز یا نارنجی تا ببینید چرا تاریک خوانده شده است.
             </p>
           </div>
         )}
@@ -718,7 +721,7 @@ function VesselDetail({
   const key = classOf(vessel);
   return (
     <div className="detail">
-      <button className="close" onClick={onClose} aria-label="Close">
+      <button className="close" onClick={onClose} aria-label="بستن">
         ×
       </button>
       <h2>{vessel.name ?? `MMSI ${vessel.mmsi}`}</h2>
@@ -727,7 +730,7 @@ function VesselDetail({
         {CLASS_LABELS[key]}
       </p>
 
-      <div className="age-badge">Last reported {formatAge(vessel.age_seconds)}</div>
+      <div className="age-badge">آخرین گزارش {faAge(vessel.age_seconds)}</div>
 
       <dl className="stats stacked">
         <div>
@@ -741,38 +744,36 @@ function VesselDetail({
           </div>
         )}
         <div>
-          <dt>Position</dt>
-          <dd>
-            {vessel.lat.toFixed(4)}°, {vessel.lon.toFixed(4)}°
-          </dd>
+          <dt>موقعیت</dt>
+          <dd>{faCoord(vessel.lat, vessel.lon)}</dd>
         </div>
         <div>
-          <dt>Speed</dt>
-          <dd>{vessel.sog_kn != null ? `${vessel.sog_kn.toFixed(1)} kn` : "not reported"}</dd>
+          <dt>سرعت</dt>
+          <dd>{vessel.sog_kn != null ? `${faNumber(vessel.sog_kn, 1)} گره` : "گزارش نشده"}</dd>
         </div>
         <div>
-          <dt>Course</dt>
-          <dd>{vessel.cog_deg != null ? `${vessel.cog_deg.toFixed(0)}°` : "not reported"}</dd>
+          <dt>جهت حرکت</dt>
+          <dd>{vessel.cog_deg != null ? `${faNumber(vessel.cog_deg)}°` : "گزارش نشده"}</dd>
         </div>
         <div>
-          <dt>Source</dt>
+          <dt>منبع</dt>
           <dd>{vessel.source}</dd>
         </div>
         <div>
-          <dt>Track points</dt>
-          <dd>{track?.points.length ?? 0}</dd>
+          <dt>نقاط مسیر</dt>
+          <dd>{faNumber(track?.points.length ?? 0)}</dd>
         </div>
       </dl>
 
-      {track?.sanctioned && <div className="banner banner-alert">Sanctioned vessel</div>}
+      {track?.sanctioned && <div className="banner banner-alert">شناور تحریم‌شده</div>}
 
       {vessel.is_suspect && vessel.anomaly_flags && (
         <div className="anomalies">
           <h3>
-            Position doubted
+            موقعیت مشکوک
             {vessel.plausibility_score != null && (
               <span className="score">
-                confidence {(vessel.plausibility_score * 100).toFixed(0)}%
+                اطمینان {faNumber(vessel.plausibility_score * 100)}٪
               </span>
             )}
           </h3>
@@ -788,8 +789,8 @@ function VesselDetail({
       )}
 
       <p className="hint">
-        Identity is self-reported over AIS and may be falsified. In this region
-        a large share of transits broadcast fabricated positions.
+        هویت از طریق AIS خوداظهاری است و ممکن است جعل شده باشد. در این منطقه
+        بخش بزرگی از عبورها موقعیت ساختگی پخش می‌کنند.
       </p>
     </div>
   );
@@ -799,35 +800,30 @@ function VesselDetail({
 function gfwLine(evidence: AnalystEvent["evidence"]): string {
   switch (evidence.gfw.cell_state) {
     case "untrusted":
-      return "Not usable on this pass: GFW's matching failed for the whole pass.";
+      return "در این گذر قابل استفاده نیست: تطبیق GFW برای کل گذر ناموفق بوده است.";
     case "unmatched":
-      return "GFW also saw a vessel here without AIS (corroborates).";
+      return "GFW هم اینجا شناوری بدون AIS دیده است (تأیید می‌کند).";
     case "matched":
-      return "GFW matched a vessel here to AIS (contradicts).";
+      return "GFW شناوری را اینجا با AIS تطبیق داده است (نقض می‌کند).";
     case "mixed":
-      return "GFW saw vessels here with and without AIS: no single verdict.";
+      return "GFW اینجا شناورهایی با و بدون AIS دیده است: حکم واحدی ندارد.";
     case "none":
-      return "GFW has no detection in this cell.";
+      return "GFW در این خانه هیچ آشکارسازی ندارد.";
     case "no_gfw_data":
-      return "GFW published no radar detections for this pass.";
+      return "GFW برای این گذر هیچ آشکارسازی راداری منتشر نکرده است.";
     default:
-      return "Not recorded.";
+      return "ثبت نشده.";
   }
 }
 
 /** CFAR's 1.0 means it passed a fixed test, not that it is certain. */
 function detectorLine(evidence: AnalystEvent["evidence"]): string {
   const { name, version } = evidence.detector ?? { name: null, version: null };
-  if (name === "cfar") return "CFAR (passed its fixed false-alarm test; no probability)";
+  if (name === "cfar") return "CFAR (از آزمون ثابت هشدار نادرست گذشته؛ احتمال نیست)";
   if (name === "pointdet") {
-    return `model ${version ?? ""}, score ${evidence.detection.score.toFixed(2)}`.trim();
+    return `مدل ${version ?? ""}، امتیاز ${faNumber(evidence.detection.score, 2)}`;
   }
-  return name ? `${name} ${version ?? ""}`.trim() : "not recorded";
-}
-
-function formatMetres(metres: number | null): string {
-  if (metres == null) return "unknown";
-  return metres >= 1000 ? `${(metres / 1000).toFixed(1)} km` : `${Math.round(metres)} m`;
+  return name ? `${name} ${version ?? ""}`.trim() : "ثبت نشده";
 }
 
 /** An AIS presence cell is 0.01 degree: about 1 km, where the vessel was during that hour. */
@@ -836,42 +832,43 @@ const AIS_CELL_DEG = 0.01;
 /** Why a detection at a persistent spot is probably not a vessel that switched AIS off. */
 function persistentNote(spot: PersistentSpot): string {
   return (
-    "Persistent spot: something was detected within 150 m of here on " +
-    `${spot.passes_seen} of ${spot.passes_imaged} earlier passes (${spot.first} to ` +
-    `${spot.last}). Likely a fixed object - a jetty, mooring, buoy or unmapped platform - ` +
-    "or a ship moored for months."
+    `نقطه پایدار: در ${faNumber(spot.passes_seen)} گذر از ${faNumber(spot.passes_imaged)} ` +
+    `گذر پیشین (${faDate(spot.first)} تا ${faDate(spot.last)}) چیزی در فاصله ۱۵۰ متری ` +
+    "اینجا آشکار شده است. احتمالاً یک سازه ثابت \u2014 اسکله، مهاربند، بویه یا سکوی " +
+    "ثبت‌نشده \u2014 یا کشتی‌ای که ماه‌ها لنگر انداخته است."
   );
 }
 
 // Global Fishing Watch reports no vessel within about 1 km of land (core/areas.py).
 const NEAR_SHORE_M = 1000;
-const REGION_NAMES = { uae: "UAE study box", iran: "Iranian coast box" } as const;
+const REGION_NAMES = { uae: "محدوده مطالعاتی امارات", iran: "محدوده ساحل ایران" } as const;
 
 /** Whether the model's accuracy was measured where this detection lies, and what it was. */
 function testedHere(detection: SarDetection): string {
   const accuracy = detection.accuracy;
   if (detection.tested && accuracy) {
-    const tenths = (value: number) => Math.round(value * 10);
+    const tenths = (value: number) => faNumber(Math.round(value * 10));
     return (
-      `yes (${REGION_NAMES[accuracy.region]}, over 1 km from land): on Sentinel-1C/1D passes ` +
-      `of September 2026 about ${tenths(accuracy.precision)} in 10 of its detections matched a ` +
-      `vessel Global Fishing Watch saw, and it found about ${tenths(accuracy.recall)} in 10 of ` +
-      `those (precision ${accuracy.precision.toFixed(2)}, recall ${accuracy.recall.toFixed(2)})`
+      `بله (${REGION_NAMES[accuracy.region]}، بیش از ۱ کیلومتر از خشکی): در گذرهای ` +
+      `Sentinel-1C/1D از ۱۷ شهریور تا ۷ مهر ۱۴۰۵ حدود ${tenths(accuracy.precision)} از هر ` +
+      `۱۰ آشکارسازی‌اش با شناوری که Global Fishing Watch دیده بود منطبق بود و حدود ` +
+      `${tenths(accuracy.recall)} از هر ۱۰ مورد آن‌ها را یافت (دقت ` +
+      `${faNumber(accuracy.precision, 2)}، بازیابی ${faNumber(accuracy.recall, 2)})`
     );
   }
   if (!detection.measured_area) {
-    return "no: outside the boxes where it was measured; its false alarms and misses were never measured here";
+    return "خیر: بیرون از محدوده‌هایی که سنجیده شده؛ هشدارهای نادرست و موارد ازدست‌رفته‌اش اینجا هرگز سنجیده نشده است";
   }
   if (detection.shore_m == null) {
-    return "no: its distance to land is unknown, and within 1 km of land its accuracy was never measured";
+    return "خیر: فاصله‌اش تا خشکی نامعلوم است و دقت تا ۱ کیلومتری خشکی هرگز سنجیده نشده است";
   }
   if (detection.shore_m < NEAR_SHORE_M) {
     return (
-      `no: ${Math.round(detection.shore_m)} m from land. Global Fishing Watch reports no ` +
-      "vessels within about 1 km of land, so the model's accuracy there was never measured"
+      `خیر: ${faMetres(detection.shore_m)} تا خشکی. Global Fishing Watch تا حدود ۱ کیلومتری ` +
+      "خشکی هیچ شناوری گزارش نمی‌کند، پس دقت مدل آنجا هرگز سنجیده نشده است"
     );
   }
-  return "no: this detector version was never measured against Global Fishing Watch";
+  return "خیر: این نسخه آشکارساز هرگز با Global Fishing Watch سنجیده نشده است";
 }
 
 function hourStart(iso: string): number {
@@ -905,7 +902,7 @@ function SarChip({
   const [failedUrl, setFailedUrl] = useState<string | null>(null);
   const [attempt, setAttempt] = useState(0);
   if (!image || !image.north_up || image.pols.length === 0) {
-    return <p className="sar-chip-missing">No satellite image stored for this detection yet.</p>;
+    return <p className="sar-chip-missing">هنوز تصویر ماهواره‌ای برای این آشکارسازی ذخیره نشده است.</p>;
   }
 
   const pol = image.pols.includes(choice) ? choice : image.pols[0];
@@ -914,7 +911,7 @@ function SarChip({
   const toPx = (lon: number, lat: number) =>
     chipPixel(lon, lat, centre.lon, centre.lat, image.pixel_m, size);
   const bar = CHIP_SCALE_BAR_M / image.pixel_m;
-  const acrossKm = ((size * image.pixel_m) / 1000).toFixed(2);
+  const acrossKm = faNumber((size * image.pixel_m) / 1000, 2);
   const passHour = hourStart(passTs);
   const half = AIS_CELL_DEG / 2;
   return (
@@ -922,19 +919,19 @@ function SarChip({
       <div className="chip-frame">
         {failedUrl === url ? (
           <div className="chip-error">
-            <p>The radar image could not be loaded.</p>
-            <button onClick={() => setAttempt((n) => n + 1)}>Try again</button>
+            <p>تصویر راداری بارگیری نشد.</p>
+            <button onClick={() => setAttempt((n) => n + 1)}>تلاش دوباره</button>
           </div>
         ) : (
           <>
             <img
               src={url}
-              alt={`Radar image (${pol.toUpperCase()}) ${acrossKm} km across, north up, centred on the candidate`}
+              alt={`تصویر راداری (${pol.toUpperCase()}) به عرض ${acrossKm} کیلومتر، شمال بالا، با مرکز آشکارسازی`}
               onError={() => setFailedUrl(url)}
             />
             <svg viewBox={`0 0 ${size} ${size}`} aria-hidden="true">
               {nearest.map((vessel) => {
-                const name = vessel.ship_name ?? (vessel.mmsi ? `MMSI ${vessel.mmsi}` : "unnamed");
+                const name = vessel.ship_name ?? (vessel.mmsi ? `MMSI ${vessel.mmsi}` : "بی‌نام");
                 const track = vessel.track ?? vessel.cells.map((c) => [c.lon, c.lat]);
                 return (
                   <g key={vessel.vessel_id}>
@@ -942,7 +939,7 @@ function SarChip({
                       const [x0, y0] = toPx(cell.lon - half, cell.lat + half);
                       const [x1, y1] = toPx(cell.lon + half, cell.lat - half);
                       const atPass = hourStart(cell.hour) === passHour;
-                      const hour = new Date(cell.hour).toISOString().slice(11, 16);
+                      const hour = faTime(cell.hour);
                       return (
                         <rect
                           key={cell.hour}
@@ -953,7 +950,7 @@ function SarChip({
                           height={y1 - y0}
                         >
                           <title>
-                            {`${name}: AIS cell at ${hour} UTC${atPass ? " (the pass hour)" : ""}`}
+                            {`${name}: خانه AIS ساعت ${hour} UTC${atPass ? " (ساعت گذر)" : ""}`}
                           </title>
                         </rect>
                       );
@@ -977,13 +974,13 @@ function SarChip({
               <g className="chip-scale" transform={`translate(10 ${size - 10})`}>
                 <line x1={0} y1={0} x2={bar} y2={0} />
                 <text x={bar / 2} y={-5}>
-                  {CHIP_SCALE_BAR_M} m
+                  {faNumber(CHIP_SCALE_BAR_M)} متر
                 </text>
               </g>
               <g className="chip-north" transform={`translate(${size - 18} 8)`}>
                 <path d="M5 0 L10 13 L5 10 L0 13 Z" />
                 <text x={5} y={25}>
-                  N
+                  ش
                 </text>
               </g>
             </svg>
@@ -991,7 +988,7 @@ function SarChip({
         )}
       </div>
       {image.pols.length > 1 && (
-        <div className="chip-pols" role="group" aria-label="Radar polarisation">
+        <div className="chip-pols" role="group" aria-label="قطبش راداری">
           {image.pols.map((p) => (
             <button
               key={p}
@@ -1005,13 +1002,13 @@ function SarChip({
         </div>
       )}
       <figcaption>
-        The Sentinel-1 radar image, {acrossKm} km across, north up. Bright means a
-        strong echo, as from a steel hull; the ring marks the detection.
+        تصویر راداری Sentinel-1 به عرض {acrossKm} کیلومتر، شمال بالا. روشن یعنی بازتاب
+        قوی، مانند بدنه فولادی؛ حلقه محل آشکارسازی را نشان می‌دهد.
         {nearest.length > 0 &&
-          " Cyan squares are the nearest AIS vessels\u2019 hourly cells (about 1 km: the vessel was somewhere inside during that hour; solid for the pass hour)."}
+          " مربع‌های فیروزه‌ای خانه‌های ساعتی نزدیک‌ترین شناورهای AIS هستند (حدود ۱ کیلومتر: شناور در آن ساعت جایی درون آن بوده است؛ پُر برای ساعت گذر)."}
         {image.no_data == null
-          ? " Hatched areas, if any, were not imaged by the radar."
-          : image.no_data > 0 && " Hatched areas were not imaged by the radar."}
+          ? " نواحی هاشورخورده، اگر باشند، با رادار تصویربرداری نشده‌اند."
+          : image.no_data > 0 && " نواحی هاشورخورده با رادار تصویربرداری نشده‌اند."}
       </figcaption>
     </figure>
   );
@@ -1025,19 +1022,18 @@ function DetectionDetail({
   detection: SarDetection;
   onClose: () => void;
 }) {
-  const passTime = detection.acq_time.slice(0, 16).replace("T", " ");
   return (
     <div className="detail">
-      <button className="close" onClick={onClose} aria-label="Close">
+      <button className="close" onClick={onClose} aria-label="بستن">
         ×
       </button>
-      <h2>Detection in a satellite image</h2>
+      <h2>آشکارسازی در تصویر ماهواره‌ای</h2>
       <p className="subtitle">
         <span className="ring" style={{ borderColor: RADAR_COLOUR }} />
-        Likely a vessel: found by the deep-learning model in a Sentinel-1 radar image
+        احتمالاً یک شناور: یافته مدل یادگیری عمیق در تصویر راداری Sentinel-1
       </p>
 
-      <div className="age-badge">Radar pass {formatAge(detection.age_hours * 3600)}</div>
+      <div className="age-badge">گذر راداری {faAge(detection.age_hours * 3600)}</div>
 
       <SarChip
         key={detection.id}
@@ -1051,34 +1047,34 @@ function DetectionDetail({
 
       <dl className="stats stacked">
         <div>
-          <dt>Position</dt>
+          <dt>موقعیت</dt>
+          <dd>{faCoord(detection.lat, detection.lon)}</dd>
+        </div>
+        <div>
+          <dt>امتیاز مدل</dt>
           <dd>
-            {detection.lat.toFixed(4)}°, {detection.lon.toFixed(4)}°
+            {faNumber(detection.confidence, 2)} (از {faNumber(MODEL_THRESHOLD, 2)} به بالا نگه
+            داشته می‌شود؛ احتمال نیست)
           </dd>
         </div>
         <div>
-          <dt>Model score</dt>
+          <dt>گذر</dt>
           <dd>
-            {detection.confidence.toFixed(2)} (kept from {MODEL_THRESHOLD.toFixed(2)}; not a
-            probability)
+            {detection.satellite} · {faDateTime(detection.acq_time)}
           </dd>
         </div>
         <div>
-          <dt>Pass</dt>
-          <dd>
-            {detection.satellite} · {passTime} UTC
-          </dd>
-        </div>
-        <div>
-          <dt>Model tested here</dt>
+          <dt>مدل اینجا آزموده شده؟</dt>
           <dd>
             {testedHere(detection)}
           </dd>
         </div>
         {detection.product_name && (
           <div>
-            <dt>Scene</dt>
-            <dd className="scene-name">{detection.product_name.replace(/_COG\.SAFE$/, "")}</dd>
+            <dt>تصویر (صحنه)</dt>
+            <dd className="scene-name" dir="ltr">
+              {detection.product_name.replace(/_COG\.SAFE$/, "")}
+            </dd>
           </div>
         )}
       </dl>
@@ -1088,12 +1084,12 @@ function DetectionDetail({
       )}
 
       <p className="hint">
-        The model says where it sees a vessel, not what it is: it has no class,
-        length or heading output, and at 10 m radar pixels a tanker and a bulk
-        carrier look alike. Whether this object carried AIS is checked only on
-        fused passes (dark-vessel candidates, red and orange).
+        مدل می‌گوید کجا شناوری می‌بیند، نه این‌که چه شناوری است: خروجی رده، طول یا
+        جهت ندارد و با پیکسل‌های ۱۰ متری رادار، نفتکش و فله‌بر شبیه هم دیده می‌شوند.
+        این‌که این شیء AIS داشته یا نه فقط در گذرهای تلفیق‌شده بررسی می‌شود (نامزدهای
+        شناور تاریک، قرمز و نارنجی).
       </p>
-      <p className="hint">Contains modified Copernicus Sentinel data.</p>
+      <p className="hint" dir="ltr">Contains modified Copernicus Sentinel data.</p>
     </div>
   );
 }
@@ -1103,16 +1099,16 @@ function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: ()
   const tier = tierOf(event);
   return (
     <div className="detail">
-      <button className="close" onClick={onClose} aria-label="Close">
+      <button className="close" onClick={onClose} aria-label="بستن">
         ×
       </button>
-      <h2>Dark-vessel candidate</h2>
+      <h2>نامزد شناور تاریک</h2>
       <p className="subtitle">
         <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS[tier] }} />
         {DARK_TIER_LABELS[tier]}
       </p>
 
-      <div className="age-badge">Radar pass {formatAge(event.age_hours * 3600)}</div>
+      <div className="age-badge">گذر راداری {faAge(event.age_hours * 3600)}</div>
 
       <SarChip
         key={event.id}
@@ -1125,17 +1121,17 @@ function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: ()
       />
 
       <div className="why-dark">
-        <h3>Why dark</h3>
+        <h3>چرا تاریک</h3>
         <p>
-          No AIS vessel&rsquo;s hourly track passes within its gate.{" "}
+          مسیر ساعتیِ هیچ شناور AIS از دروازه آن نمی‌گذرد.{" "}
           {evidence.gate.nearest_gap_m == null
-            ? "No AIS vessel at all was near this pass."
-            : `It lies ${formatMetres(evidence.gate.nearest_gap_m)} outside the nearest AIS vessel's gate (still dark at the ${formatMetres(evidence.dark_up_to_m)} step of the margin sweep).`}
+            ? "اصلاً هیچ شناور AIS نزدیک این گذر نبود."
+            : `${faMetres(evidence.gate.nearest_gap_m)} بیرون از دروازه نزدیک‌ترین شناور AIS قرار دارد (در گام ${faMetres(evidence.dark_up_to_m)} از پویش حاشیه هنوز تاریک است).`}
         </p>
         {evidence.pass_flags.presence_checked === false && (
           <p className="caveat">
-            This pass had too few GFW detections to check its AIS feed for gaps:
-            a gap in the feed would look like dark vessels.
+            این گذر آشکارسازی‌های GFW کافی برای بررسی شکاف‌های خوراک AIS نداشت: شکاف
+            در خوراک مانند شناورهای تاریک دیده می‌شود.
           </p>
         )}
         {event.persistent && <p className="caveat">{persistentNote(event.persistent)}</p>}
@@ -1143,54 +1139,51 @@ function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: ()
 
       <dl className="stats stacked">
         <div>
-          <dt>Position</dt>
-          <dd>
-            {evidence.detection.lat.toFixed(4)}°, {evidence.detection.lon.toFixed(4)}°
-          </dd>
+          <dt>موقعیت</dt>
+          <dd>{faCoord(evidence.detection.lat, evidence.detection.lon)}</dd>
         </div>
         <div>
-          <dt>Detector</dt>
+          <dt>آشکارساز</dt>
           <dd>{detectorLine(evidence)}</dd>
         </div>
         <div>
-          <dt>GFW radar</dt>
+          <dt>رادار GFW</dt>
           <dd>{gfwLine(evidence)}</dd>
         </div>
         <div>
-          <dt>Distance to shore / box edge</dt>
+          <dt>فاصله تا ساحل / لبه محدوده</dt>
           <dd>
-            {formatMetres(evidence.prefilter.shore_m)} / {formatMetres(evidence.prefilter.edge_m)}
+            {faMetres(evidence.prefilter.shore_m)} / {faMetres(evidence.prefilter.edge_m)}
           </dd>
         </div>
         <div>
-          <dt>Gate</dt>
+          <dt>دروازه</dt>
           <dd>
-            cell + R/V {evidence.gate.r_over_v_s} s × speed + margin{" "}
-            {formatMetres(evidence.gate.margin_m)}
+            خانه + R/V {faNumber(evidence.gate.r_over_v_s)} ثانیه × سرعت + حاشیه{" "}
+            {faMetres(evidence.gate.margin_m)}
           </dd>
         </div>
         <div>
-          <dt>Pass</dt>
-          <dd className="scene-name">{evidence.scene.replace(/_COG\.SAFE$/, "")}</dd>
+          <dt>گذر</dt>
+          <dd className="scene-name" dir="ltr">
+            {evidence.scene.replace(/_COG\.SAFE$/, "")}
+          </dd>
         </div>
       </dl>
 
       <div className="nearest-ais">
-        <h3>Nearest AIS vessels (white on the map)</h3>
+        <h3>نزدیک‌ترین شناورهای AIS (سفید روی نقشه)</h3>
         <ul>
           {evidence.nearest_ais.map((vessel) => (
             <li key={vessel.vessel_id}>
-              <strong>{vessel.ship_name ?? (vessel.mmsi ? `MMSI ${vessel.mmsi}` : "unnamed")}</strong>
+              <strong>{vessel.ship_name ?? (vessel.mmsi ? `MMSI ${vessel.mmsi}` : "بی‌نام")}</strong>
               <span>
-                {formatMetres(vessel.distance_m)} away
+                {faMetres(vessel.distance_m)} فاصله
                 {vessel.flag ? ` · ${vessel.flag}` : ""}
-                {vessel.stationary ? " · anchored" : vessel.sparse ? " · seen 1 hour" : ""}
+                {vessel.stationary ? " · لنگرانداخته" : vessel.sparse ? " · فقط ۱ ساعت دیده شده" : ""}
               </span>
               <span className="cells">
-                {vessel.cells
-                  .map((cell) => new Date(cell.hour).toISOString().slice(11, 16))
-                  .join(", ")}{" "}
-                UTC
+                {vessel.cells.map((cell) => faTime(cell.hour)).join("، ")} UTC
               </span>
             </li>
           ))}
@@ -1198,12 +1191,12 @@ function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: ()
       </div>
 
       <p className="hint">
-        A candidate, not a verdict. AIS here comes as one position per vessel
-        per hour in about 1 km cells, so a ship can look dark when its hourly
-        cell is far from where the radar caught it, and GNSS jamming moves AIS
-        positions. Data: {evidence.datasets.join(", ") || "unknown"}.
+        نامزد است، نه حکم. AIS اینجا برای هر شناور یک موقعیت در ساعت در خانه‌های
+        حدوداً ۱ کیلومتری است، پس کشتی‌ای ممکن است تاریک به نظر برسد وقتی خانه
+        ساعتی‌اش از جایی که رادار آن را دید دور است، و اخلال GNSS موقعیت‌های AIS را
+        جابه‌جا می‌کند. داده‌ها: <bdi>{evidence.datasets.join(", ") || "نامعلوم"}</bdi>.
       </p>
-      <p className="hint">{evidence.attribution}</p>
+      <p className="hint" dir="ltr">{evidence.attribution}</p>
     </div>
   );
 }
