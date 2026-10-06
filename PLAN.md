@@ -454,6 +454,11 @@ Hungarian AIS↔SAR matcher, event engine, evidence storage, alert feed.
 ### Phase 7 — UI/UX build-out (4–5 days)
 Timeline scrubber, coverage honesty overlay, vessel detail panel with SAR chip, filters, watchlists, geofence drawing, alert feed, sanctions badges, RTL support.
 **Done when:** a non-expert can find a dark vessel unaided.
+**Revised 2026-10-06 (the user's decision; §17 "Phase 7 closed"):** the console
+built so far is enough for the bachelor's thesis. Phase 7 closes with the
+Persian, right-to-left console as its last slice; watchlists, geofence
+drawing, sanctions badges, the coverage heatmap and further filters move to
+later work, and the non-expert usability test was not run.
 
 ### Phase 8 — Evaluation + writing (4–5 days)
 Full benchmark tables, ablations, error analysis, figure generation, reproducibility pack.
@@ -2800,3 +2805,33 @@ The 2-4 October Iranian passes are prepared for fusion
 (`data/logs/run_dark_iran_newest.sh`, detections and chips already stored):
 fusable from 7 October (Kish, Assaluyeh) to 9 October 14:42 UTC (Bushehr,
 Kharg); the runner skips passes still too young and can be relaunched.
+
+### 2026-10-06 - Phase 7 closed: the console in Persian, right to left
+
+The user judged the project enough for a bachelor's thesis and asked for
+the console in Persian and right to left, then Phase 8. Phase 7 is closed
+by that decision (§11 Phase 7, revised).
+
+- Built (`a708724`): every UI text in Persian; `dir="rtl"` with logical CSS
+  properties, so the rail sits on the right and cards on the left; dates
+  in the Solar Hijri calendar and numbers in Persian digits (the user's
+  choice), all times in UTC as the satellite data are, through the
+  browser's own Intl (`web/src/fa.ts`, tested with Node's built-in test
+  runner: `npm test`); the timeline runs right to left. Scene names,
+  vessel names and the Copernicus and Global Fishing Watch attributions
+  stay left to right and in English, as their licences word them.
+- Checked in the browser: the rail, the timeline with Jalali day marks, a
+  searched-area popup and a dark-vessel card (image, Persian distances,
+  GFW verdict, nearest AIS vessels).
+- Limits: the basemap (Carto) labels places mostly in Latin script; the
+  few Persian-script names would need MapLibre's RTL text plugin (a
+  third-party script, not loaded); API error messages stay technical
+  English.
+- Phase 7 as delivered: dark-vessel rings and evidence cards, the alert
+  feed, the radar image on every detection and candidate card, the Iranian
+  coast with searched areas, per-region accuracy claims (not within 1 km of
+  land), persistent-spot marks, the timeline scrubber, Persian RTL. Not
+  built (later work): watchlists, geofence drawing, sanctions badges (the
+  field exists, no list feeds it), a coverage heatmap, filters beyond layer
+  toggles; the non-expert usability test of the original done-when was not
+  run.
