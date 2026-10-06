@@ -2655,5 +2655,32 @@ Kish 0.837 (46), Bandar Abbas 0.813 (734), Jask 0.740 (40), Bushehr 0.718
   share a pass (20 of 63 S1A scenes and 21 of 41 S1C/S1D scenes serve two
   boxes), so the intervals are somewhat narrow; Bandar Abbas and Larak share
   one GFW cell at a corner; the per-box numbers rest on 9 to 734 GFW
-  detections; why precision is low at Assaluyeh (no OPD platform in that box)
-  was not looked at.
+  detections.
+
+**Why precision is lower off Iran (checked 2026-10-06, offline).** Of the
+model's false alarms against GFW in cells at least 1 km from land, 349 of
+926 (38%) lie at spots (300 m grid) where a false alarm recurs on at least
+3 passes of the two sets (CFAR: 346 of 955, 36%); by box Bushehr 57%,
+Bandar Abbas 36%, Kharg 35%, Assaluyeh 34%, Kish 38%, Larak 26%, Jask 0%.
+The five most persistent spots are detected again in the console's October
+2026 passes (scores 0.79-0.99), and their chips show: at Kharg (1.4 km
+offshore) a straight structure about 1 km long with bright spots on it, the
+tanker jetty; at Assaluyeh (4.7 km out, 7 passes) and Bushehr (11 km out,
+13 passes) a compact point echo, next to a bright cross-shaped target (a
+large metal structure's sidelobes) at Bushehr. Fixed objects - jetties,
+moorings, buoys, platforms missing from the OPD mask - are removed by GFW as
+infrastructure but counted as our false alarms. Some recurring spots may
+also be ships moored for months (floating storage is common off Iran),
+which a persistence-based infrastructure filter also removes: these
+objects cannot be told apart from GFW alone. The model's precision off Iran
+is therefore a lower bound; a persistence mask built from earlier passes
+(as GFW does) would remove most of them, at the risk of hiding long-moored
+ships (not built; a plan change).
+
+**In the console (`57f9a12`, the user's choice).** A detection counts as
+tested in any of the 12 measured boxes when it lies at least 1 km from land
+(each detection now stores its distance to land; the 770 stored rows were
+backfilled: 4 of the 377 product detections lie within 1 km), and its card
+quotes its region's Sentinel-1C/1D numbers from the >= 1 km scoring (UAE
+precision 0.59, recall 0.92; Iran 0.51, 0.91); near shore, with an unknown
+distance or outside the boxes, the card says why accuracy is unmeasured.
