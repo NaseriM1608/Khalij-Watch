@@ -40,4 +40,5 @@ To check pages by eye without a PDF viewer:
 - Intervals: «a تا b» (brackets inside `\LRE` are mirrored).
 - Latin terms: `\lr{...}`. Persian text inside TikZ/pgfplots nodes: `\rl{...}`
   (nodes are left to right).
-- Title-page placeholders in `main.tex` (`[نام دانشگاه]` etc.) are to be filled in.
+- The document is a «پروژه کارشناسی» (title page in `main.tex`); call it
+  «گزارش» or «پروژه» in the text, not «پایان‌نامه».

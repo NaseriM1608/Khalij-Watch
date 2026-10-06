@@ -1,5 +1,5 @@
-% Bachelor's thesis draft (Persian, XePersian). Compile with XeLaTeX from this folder:
-%   xelatex main.tex   (twice, for the table of contents and references)
+% Bachelor's project report draft (Persian, XePersian). Compile with XeLaTeX from this folder:
+%   xelatex main.tex   (three times, for the contents, lists and references)
 % Fonts: Estedad (fonts/, from github.com/aminabedi68/Estedad, SIL OFL).
 % Numbers, tables and chart data come from scripts/make_reports.py (../tables, ../data).
 \documentclass[12pt,a4paper,oneside]{report}
@@ -25,18 +25,19 @@
 \begin{titlepage}
 \centering
 \vspace*{2cm}
-{\large [نام دانشگاه]\par}
-{\large [دانشکده و گروه]\par}
+{\large دانشگاه شهید باهنر کرمان\par}
+{\large دانشکده فنی و مهندسی\par}
 \vspace{1.5cm}
-{\large پایان‌نامه کارشناسی\par}
+{\large پروژه کارشناسی\par}
+{\large رشته مهندسی کامپیوتر\par}
 \vspace{1.5cm}
 {\LARGE\bfseries آشکارسازی شناورها در تصاویر راداری \lr{Sentinel-1} در خلیج فارس با یادگیری عمیق و یافتن شناورهای تاریک\par}
 \vspace{2cm}
-{\large نگارنده: [نام دانشجو]\par}
+{\large نگارنده: محمود ناصری\par}
 \vspace{0.5cm}
-{\large استاد راهنما: [نام استاد راهنما]\par}
+{\large استاد راهنما: دکتر بحرالعلوم\par}
 \vfill
-{\large [ماه و سال]\par}
+{\large پاییز ۱۴۰۵\par}
 \end{titlepage}
 
 \pagenumbering{alph}
@@ -80,7 +81,7 @@ The Persian Gulf and the Strait of Hormuz carry some of the world's densest
 shipping, yet the Automatic Identification System (AIS) by which ships report
 their position is self-reported and can be switched off or spoofed. Sentinel-1
 synthetic aperture radar (SAR) sees vessels whatever their AIS, cloud or
-daylight. This thesis trains a deep-learning point detector (EfficientNet-B0
+daylight. This project trains a deep-learning point detector (EfficientNet-B0
 encoder, U-Net decoder) on Sentinel-1 images without manual labels, using
 Global Fishing Watch (GFW) radar detections as the source of labels, and runs
 it on a laptop CPU. A first model found vessels without AIS less often than a
