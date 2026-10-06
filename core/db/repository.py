@@ -716,14 +716,35 @@ class EventRepository:
     def __init__(self, session: Session) -> None:
         self._session = session
 
-    def replace_for_scene(self, scene_id: int, run: str, events: Sequence[NewEvent]) -> int:
-        """Store one fusion run's events for a pass, replacing that run's earlier events for it."""
+    def replace_for_scene(
+        self,
+        scene_id: int,
+        run: str,
+        events: Sequence[NewEvent],
+        *,
+        bbox: BBox | None = None,
+    ) -> int:
+        """Store one fusion run's events for a pass, replacing that run's earlier events for it.
+
+        With ``bbox``, only the run's events of the pass inside it are replaced,
+        so fusing another box of the same pass keeps the first box's events;
+        every new event must then lie inside it.
+        """
         for event in events:  # validate everything before deleting anything
             if not event.evidence:
                 raise ValueError(f"{event.event_type} at {event.lon}, {event.lat} has no evidence")
-        self._session.query(Event).filter(Event.scene_id == scene_id, Event.run == run).delete(
-            synchronize_session=False
-        )
+            if bbox is not None and not bbox.contains(event.lon, event.lat):
+                raise ValueError(
+                    f"{event.event_type} at {event.lat:.5f}, {event.lon:.5f} lies outside "
+                    "the box it replaces"
+                )
+        old = self._session.query(Event).filter(Event.scene_id == scene_id, Event.run == run)
+        if bbox is not None:
+            old = old.filter(
+                Event.lon.between(bbox.min_lon, bbox.max_lon),
+                Event.lat.between(bbox.min_lat, bbox.max_lat),
+            )
+        old.delete(synchronize_session=False)
         self._session.add_all(
             Event(
                 event_type=e.event_type,

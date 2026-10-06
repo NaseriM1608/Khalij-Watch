@@ -210,7 +210,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         edge_m=EDGE_M,
     )
     with session_scope(factory) as session:
-        written = EventRepository(session).replace_for_scene(stored.scene_id, RUN, events)
+        written = EventRepository(session).replace_for_scene(stored.scene_id, RUN, events, bbox=box)
     detectors = sorted({v.detector for v in stored.detections})
     print(
         f"{stored.product_name} ({stored.acquired:%Y-%m-%d %H:%M} UTC, {'/'.join(detectors)}), margin {margin:g} m"

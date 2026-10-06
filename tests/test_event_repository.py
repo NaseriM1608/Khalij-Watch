@@ -101,6 +101,26 @@ def test_rerunning_a_scene_replaces_only_that_runs_events(session):
     ]
 
 
+def test_fusing_another_box_of_the_same_pass_keeps_the_first_boxs_events(session):
+    """One pass often covers two boxes (Bushehr and Kharg; Bandar Abbas and Larak)."""
+    repo = EventRepository(session)
+    scene_id = scene(session)
+    west, east = BBox(56.43, 25.13, 56.53, 25.31), BBox(56.53, 25.13, 56.63, 25.31)
+    repo.replace_for_scene(scene_id, "fusion-v1", [dark(56.45, 25.20)], bbox=west)
+    repo.replace_for_scene(scene_id, "fusion-v1", [dark(56.60, 25.20)], bbox=east)
+    repo.replace_for_scene(scene_id, "fusion-v1", [dark(56.46, 25.21)], bbox=west)
+    assert sorted(e.lon for e in repo.in_bbox(BOX)) == [56.46, 56.60]
+
+
+def test_an_event_outside_the_box_it_replaces_is_refused(session):
+    repo = EventRepository(session)
+    scene_id = scene(session)
+    with pytest.raises(ValueError, match="outside"):
+        repo.replace_for_scene(
+            scene_id, "fusion-v1", [dark(56.60, 25.20)], bbox=BBox(56.43, 25.13, 56.53, 25.31)
+        )
+
+
 def test_queries_filter_by_box_and_type_newest_first(session):
     repo = EventRepository(session)
     scene_id = scene(session)
