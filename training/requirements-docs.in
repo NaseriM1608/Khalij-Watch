@@ -1,0 +1,3 @@
+# PDF rendering for checking the thesis pages (scripts/render_pdf.py); .venv-docs.
+pypdfium2
+pillow
