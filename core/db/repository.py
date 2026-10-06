@@ -394,15 +394,19 @@ class SceneRepository:
         bbox: BBox,
         *,
         since: dt.datetime | None = None,
+        until: dt.datetime | None = None,
         limit: int = 500,
     ) -> list[SarScene]:
-        """Scenes whose footprint overlaps a bbox, newest first."""
+        """Scenes whose footprint overlaps a bbox, acquired in [since, until], newest first."""
         params = dict(bbox_params(bbox))
         params["row_limit"] = limit
         since_clause = ""
         if since is not None:
             params["since"] = _bind_timestamp(self._session, since)
             since_clause = "AND acq_time >= :since"
+        if until is not None:
+            params["until"] = _bind_timestamp(self._session, until)
+            since_clause += " AND acq_time <= :until"
 
         sql = f"""
             SELECT * FROM sar_scenes
@@ -547,6 +551,7 @@ class DetectionRepository:
         bbox: BBox,
         *,
         since: dt.datetime | None = None,
+        until: dt.datetime | None = None,
         limit: int = 20_000,
         detector: str = "auto",
         detector_version: str | None = None,
@@ -561,7 +566,8 @@ class DetectionRepository:
         this box and the pass's other rows where it has none.
         ``detector_version`` keeps one version only (e.g. the product model's).
         ``include_fused`` keeps passes with events whatever their age, as their
-        dark-vessel candidates and searched areas are kept.
+        dark-vessel candidates and searched areas are kept. ``until`` leaves out
+        passes acquired after it, fused or not (the console as of a past moment).
         """
         if detector not in DETECTOR_CHOICES:
             raise ValueError(f"detector must be one of {DETECTOR_CHOICES}, got {detector!r}")
@@ -576,6 +582,9 @@ class DetectionRepository:
                     "AND (s.acq_time >= :since OR d.scene_id IN "
                     "(SELECT scene_id FROM events WHERE scene_id IS NOT NULL))"
                 )
+        if until is not None:
+            params["until"] = _bind_timestamp(self._session, until)
+            since_clause += " AND s.acq_time <= :until"
         detector_clause = ""
         if detector == "auto":
             # Since filters whole passes, the same pass is in or out for both
@@ -763,15 +772,22 @@ class EventRepository:
         return len(events)
 
     def in_bbox(
-        self, bbox: BBox, *, event_type: str | None = None, limit: int = 5_000
+        self,
+        bbox: BBox,
+        *,
+        event_type: str | None = None,
+        until: dt.datetime | None = None,
+        limit: int = 5_000,
     ) -> list[EventView]:
-        """Events inside a bounding box, newest first."""
+        """Events inside a bounding box, of passes up to ``until``, newest first."""
         query = select(Event).where(
             Event.lon.between(bbox.min_lon, bbox.max_lon),
             Event.lat.between(bbox.min_lat, bbox.max_lat),
         )
         if event_type is not None:
             query = query.where(Event.event_type == event_type)
+        if until is not None:
+            query = query.where(Event.ts <= _as_utc(until))
         query = query.order_by(Event.ts.desc(), Event.id).limit(limit)
         return [_event_view(e) for e in self._session.execute(query).scalars()]
 
@@ -904,7 +920,12 @@ class AnalysedWindowRepository:
         self._session.flush()
 
     def recent(
-        self, bbox: BBox, *, since: dt.datetime, limit: int = 2_000
+        self,
+        bbox: BBox,
+        *,
+        since: dt.datetime,
+        until: dt.datetime | None = None,
+        limit: int = 2_000,
     ) -> list[AnalysedWindowView]:
         """Windows overlapping ``bbox`` of passes acquired since ``since``, newest pass first.
 
@@ -935,6 +956,7 @@ class AnalysedWindowRepository:
                 AnalysedWindow.max_lat >= bbox.min_lat,
                 AnalysedWindow.min_lat <= bbox.max_lat,
                 or_(SarScene.acq_time >= _as_utc(since), AnalysedWindow.scene_id.in_(fused)),
+                *([SarScene.acq_time <= _as_utc(until)] if until is not None else []),
             )
             .order_by(SarScene.acq_time.desc(), AnalysedWindow.id)
             .limit(limit)

@@ -273,6 +273,36 @@ export interface DarkEvidence {
   attribution: string;
 }
 
+/** One stored pass over a measured box (/api/timeline). */
+export interface TimelinePass {
+  scene_id: number;
+  product_name: string;
+  satellite: string;
+  acq_time: string;
+  /** The product model searched this box on this pass. */
+  searched: boolean;
+  /** Detections stored now from that search. */
+  detections: number;
+  /** The pass holds dark-vessel candidates in this box. */
+  fused: boolean;
+}
+
+export interface TimelineArea {
+  name: string;
+  region: "uae" | "iran";
+  lon: number;
+  lat: number;
+  /** Oldest first. */
+  passes: TimelinePass[];
+}
+
+export interface TimelineResponse {
+  generated_at: string;
+  since: string;
+  days: number;
+  areas: TimelineArea[];
+}
+
 /** A spot where the model detected something on many archive passes (scripts/build_persistence.py). */
 export interface PersistentSpot {
   area: string;
@@ -333,13 +363,20 @@ export const api = {
   },
   track: (mmsi: number, hours = 24) =>
     getJson<Track>(`/api/vessels/${mmsi}/track?hours=${hours}`),
-  scenes: (days = 14) => getJson<ScenesResponse>(`/api/scenes?days=${days}`),
+  /** ``asOf`` (ISO, from the timeline scrubber) looks from an earlier moment; null is now. */
+  scenes: (days = 14, asOf: string | null = null) =>
+    getJson<ScenesResponse>(`/api/scenes?days=${days}${asOfQuery(asOf)}`),
   /** The product model's detections only, unless another detector is asked for. */
-  detections: (days = 14, detector = "product") =>
-    getJson<DetectionsResponse>(`/api/detections?days=${days}&detector=${detector}`),
-  darkVessels: () => getJson<EventsResponse>("/api/events?type=DARK_VESSEL"),
-  analysed: (days = 14, detector = "product") =>
-    getJson<AnalysedResponse>(`/api/analysed?days=${days}&detector=${detector}`),
+  detections: (days = 14, detector = "product", asOf: string | null = null) =>
+    getJson<DetectionsResponse>(
+      `/api/detections?days=${days}&detector=${detector}${asOfQuery(asOf)}`,
+    ),
+  darkVessels: (asOf: string | null = null) =>
+    getJson<EventsResponse>(`/api/events?type=DARK_VESSEL${asOfQuery(asOf)}`),
+  analysed: (days = 14, detector = "product", asOf: string | null = null) =>
+    getJson<AnalysedResponse>(`/api/analysed?days=${days}&detector=${detector}${asOfQuery(asOf)}`),
+  /** Every stored pass over each measured box: the timeline scrubber's bands. */
+  timeline: (days = 60) => getJson<TimelineResponse>(`/api/timeline?days=${days}`),
   /**
    * Served from disk; the browser never causes a read of the radar scene itself.
    * The query names the chip's content (scene, position, cut time), so an event
@@ -357,6 +394,10 @@ export const api = {
       attempt,
     )}`,
 };
+
+function asOfQuery(asOf: string | null): string {
+  return asOf ? `&as_of=${encodeURIComponent(asOf)}` : "";
+}
 
 function chipQuery(
   scene: string,

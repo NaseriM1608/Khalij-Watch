@@ -135,8 +135,106 @@ body {
 
 /* ----------------------------------------------------------------- map -- */
 
-.stage { position: relative; min-width: 0; }
+.stage { position: relative; min-width: 0; display: flex; flex-direction: column; }
+.map-holder { position: relative; flex: 1; min-height: 0; }
 .map { position: absolute; inset: 0; }
+
+/* ------------------------------------------------------------ timeline -- */
+
+.timeline {
+  background: var(--panel);
+  border-top: 1px solid var(--line);
+  padding: 6px 10px 8px;
+  user-select: none;
+}
+.timeline-head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  font-size: 11px;
+  color: var(--muted);
+}
+.timeline-head .link {
+  background: none;
+  border: 0;
+  padding: 0;
+  color: var(--accent);
+  cursor: pointer;
+  font: inherit;
+}
+.timeline-title { color: var(--text); }
+.timeline-key { display: inline-flex; align-items: center; gap: 4px; }
+.timeline-key i { display: inline-block; width: 3px; height: 10px; margin-left: 8px; }
+.timeline-head .as-of { margin-left: auto; color: var(--text); font-weight: 600; }
+.timeline-head .as-of.past { color: var(--warn); }
+.timeline-head .live {
+  background: var(--panel-2);
+  border: 1px solid var(--line);
+  color: var(--text);
+  border-radius: 4px;
+  padding: 1px 8px;
+  cursor: pointer;
+  font: inherit;
+}
+.timeline-body { display: flex; gap: 8px; margin-top: 4px; }
+.timeline-labels {
+  list-style: none;
+  margin: 16px 0 0;
+  padding: 0;
+  width: 92px;
+  flex: none;
+  font-size: 10px;
+  line-height: 13px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+.timeline-labels li.iran { color: #c9b98f; }
+.timeline-bar {
+  position: relative;
+  flex: 1;
+  height: 174px;
+  cursor: crosshair;
+  touch-action: none;
+  background:
+    repeating-linear-gradient(to bottom, transparent 0 15px, rgba(255, 255, 255, 0.03) 15px 28px);
+  background-position: 0 16px;
+}
+.timeline-row { position: absolute; left: 0; right: 0; height: 13px; }
+.timeline-tick {
+  position: absolute;
+  top: 2px;
+  width: 3px;
+  height: 9px;
+  margin-left: -1px;
+  border-radius: 1px;
+}
+.timeline-day {
+  position: absolute;
+  top: 0;
+  font-size: 10px;
+  color: var(--muted);
+  transform: translateX(-50%);
+  border-left: 1px solid var(--line);
+  padding-left: 3px;
+}
+.timeline-cursor {
+  position: absolute;
+  top: 14px;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--warn);
+  pointer-events: none;
+}
+.timeline-future {
+  position: absolute;
+  top: 14px;
+  bottom: 0;
+  right: 0;
+  background: rgba(8, 11, 17, 0.6);
+  pointer-events: none;
+}
 .maplibregl-ctrl-attrib { font-size: 10px; }
 
 /* ------------------------------------------------------------- context -- */

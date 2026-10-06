@@ -8,6 +8,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { Timeline } from "./Timeline";
 import { VesselMap } from "./VesselMap";
 import {
   ANOMALY_LABELS,
@@ -31,6 +32,7 @@ import {
   PersistentSpot,
   SarDetection,
   ScenesResponse,
+  TimelineResponse,
   Track,
   Vessel,
   api,
@@ -95,6 +97,9 @@ export default function App() {
     lat: number;
   } | null>(null);
   const detectionsRef = useRef<SarDetection[]>([]);
+  // The moment the radar layers look from (the timeline scrubber); null is now.
+  const [asOf, setAsOf] = useState<string | null>(null);
+  const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
@@ -102,14 +107,40 @@ export default function App() {
       .aoi()
       .then((r) => setAoi(r.gulf))
       .catch(() => undefined);
-    api.scenes(14).then(setCoverage).catch(() => undefined);
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    api
+      .scenes(14, asOf)
+      .then((r) => !cancelled && setCoverage(r))
+      .catch(() => undefined);
+    return () => {
+      cancelled = true;
+    };
+  }, [asOf]);
+
+  // Every pass per box for the timeline: changes only when scenes are stored.
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      api
+        .timeline()
+        .then((r) => !cancelled && setTimeline(r))
+        .catch(() => undefined);
+    load();
+    const timer = setInterval(load, RADAR_REFRESH_MS);
+    return () => {
+      cancelled = true;
+      clearInterval(timer);
+    };
   }, []);
 
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const response = await api.detections(RADAR_LOOKBACK_DAYS);
+        const response = await api.detections(RADAR_LOOKBACK_DAYS, "product", asOf);
         if (cancelled) return;
         setRadar(response);
         setRadarError(null);
@@ -123,14 +154,14 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+  }, [asOf]);
 
   // Where the detector searched: changes only when a detection job runs.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       try {
-        const response = await api.analysed(RADAR_LOOKBACK_DAYS);
+        const response = await api.analysed(RADAR_LOOKBACK_DAYS, "product", asOf);
         if (cancelled) return;
         setAnalysed(response);
         setAnalysedError(null);
@@ -144,7 +175,7 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+  }, [asOf]);
 
   const searchedCounts = useMemo(() => {
     const windows = analysed?.windows ?? [];
@@ -159,7 +190,7 @@ export default function App() {
     let cancelled = false;
     const load = async () => {
       try {
-        const response = await api.darkVessels();
+        const response = await api.darkVessels(asOf);
         if (cancelled) return;
         setDark(response);
         setDarkError(null);
@@ -173,7 +204,7 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, []);
+  }, [asOf]);
 
   useEffect(() => {
     let cancelled = false;
@@ -373,8 +404,10 @@ export default function App() {
             <p className="hint last-look">
               Last radar look{" "}
               {formatAge(
-                (Date.now() - new Date(coverage.last_look).getTime()) / 1000,
+                ((asOf ? Date.parse(asOf) : Date.now()) - new Date(coverage.last_look).getTime()) /
+                  1000,
               )}
+              {asOf ? " (as of the timeline)" : ""}
               {coverage.satellites.length > 0 &&
                 ` · ${coverage.satellites.join(", ")}`}
             </p>
@@ -616,6 +649,7 @@ export default function App() {
       </aside>
 
       <main className="stage">
+        <div className="map-holder">
         <VesselMap
           vessels={visible}
           scenes={showCoverage ? (coverage?.scenes ?? []) : []}
@@ -632,6 +666,17 @@ export default function App() {
           analysed={showRadar ? (analysed?.windows ?? NO_WINDOWS) : NO_WINDOWS}
           selectedDetectionId={selectedDetection?.id ?? null}
           onSelectDetection={selectDetection}
+        />
+        </div>
+        <Timeline
+          data={timeline}
+          asOf={asOf}
+          onChange={(moment) => {
+            // A card of a pass after the new moment would describe the future.
+            setSelectedEventId(null);
+            setSelectedDetectionKey(null);
+            setAsOf(moment);
+          }}
         />
       </main>
 

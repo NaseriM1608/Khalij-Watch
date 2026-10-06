@@ -26,11 +26,14 @@ from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
+from core.ais.landmask import point_in_polygon
 from core.areas import (
     MEASURED_AREAS,
     PRODUCT_DETECTOR,
     PRODUCT_VERSION,
+    REGIONS,
     STUDY_AREAS,
+    box_around,
     clip_to_box,
     detection_accuracy,
     inside_measured_box,
@@ -82,6 +85,9 @@ def _same_detection(key: str, detection: DetectionView) -> bool:
 
 # SQLite's largest INTEGER: a larger id cannot even be looked up.
 MAX_ROW_ID = 2**63 - 1
+# The moment to look from (the timeline scrubber); default now. One shared
+# default object, as ruff (B008) asks for a non-trivial Query default.
+AS_OF_QUERY = Query(default=None, description="ISO time to look from; default now")
 # Decimals of a published detection position (about 10 cm).
 POSITION_DECIMALS = 6
 # How often the websocket pushes a refreshed viewport.
@@ -254,19 +260,20 @@ async def scenes(
     bbox: str | None = Query(default=None),
     days: int = Query(default=14, ge=1, le=365),
     limit: int = Query(default=300, ge=1, le=2000),
+    as_of: dt.datetime | None = AS_OF_QUERY,
 ) -> dict[str, Any]:
-    """Radar scenes covering an area, newest first.
+    """Radar scenes covering an area, newest first (as of ``as_of``: acquired by then).
 
     This is the coverage-honesty layer. Where no recent scene exists the
     platform is blind, and the UI must be able to say so rather than implying
     the absence of detections means the absence of vessels.
     """
     box = _parse_bbox(bbox)
-    now = dt.datetime.now(dt.UTC)
+    now = _looking_from(as_of)
     since = now - dt.timedelta(days=days)
 
     with session_scope(_sessions()) as session:
-        found = SceneRepository(session).intersecting(box, since=since, limit=limit)
+        found = SceneRepository(session).intersecting(box, since=since, until=now, limit=limit)
         payload = [
             {
                 "id": scene.id,
@@ -291,6 +298,7 @@ async def scenes(
     newest = max((s["acq_time"] for s in payload), default=None)
     return {
         "generated_at": now.isoformat(),
+        "as_of": _as_of_json(as_of, now),
         "count": len(payload),
         "scenes": payload,
         "last_look": newest,
@@ -305,6 +313,7 @@ async def detections(
     days: int = Query(default=14, ge=1, le=365),
     limit: int = Query(default=20_000, ge=1, le=100_000),
     detector: Literal["auto", "cfar", "pointdet", "all", "product"] = Query(default="auto"),
+    as_of: dt.datetime | None = AS_OF_QUERY,
 ) -> dict[str, Any]:
     """Vessels detected in Sentinel-1 satellite images of recent passes, newest pass first.
 
@@ -318,13 +327,14 @@ async def detections(
     (GET /api/detections/{id}/chip/{pol}).
     """
     box = _parse_bbox(bbox)
-    now = dt.datetime.now(dt.UTC)
+    now = _looking_from(as_of)
     since = now - dt.timedelta(days=days)
     product = detector == "product"
     with session_scope(_sessions()) as session:
         found = DetectionRepository(session).in_bbox(
             box,
             since=since,
+            until=now,
             limit=limit,
             detector=PRODUCT_DETECTOR if product else detector,
             detector_version=PRODUCT_VERSION if product else None,
@@ -335,6 +345,7 @@ async def detections(
     indexes = {name: chip_index(root, name) for name in {d.product_name for d in found}}
     return {
         "generated_at": now.isoformat(),
+        "as_of": _as_of_json(as_of, now),
         "bbox": _bbox_json(box),
         "detector": detector,
         "count": len(found),
@@ -375,6 +386,7 @@ async def analysed(
     bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
     days: int = Query(default=14, ge=1, le=365),
     detector: Literal["all", "product"] = Query(default="all"),
+    as_of: dt.datetime | None = AS_OF_QUERY,
 ) -> dict[str, Any]:
     """Where a detector searched recent and fused passes, and whether it was tested there.
 
@@ -390,9 +402,11 @@ async def analysed(
     events are.
     """
     box = _parse_bbox(bbox)
-    now = dt.datetime.now(dt.UTC)
+    now = _looking_from(as_of)
     with session_scope(_sessions()) as session:
-        found = AnalysedWindowRepository(session).recent(box, since=now - dt.timedelta(days=days))
+        found = AnalysedWindowRepository(session).recent(
+            box, since=now - dt.timedelta(days=days), until=now
+        )
     if detector == "product":
         found = [
             w
@@ -402,6 +416,7 @@ async def analysed(
     windows = [w for w in (_window_to_json(f, now) for f in found) if w["searched"]]
     return {
         "generated_at": now.isoformat(),
+        "as_of": _as_of_json(as_of, now),
         "count": len(windows),
         "windows": windows,
         "study_areas": sorted(STUDY_AREAS),
@@ -448,6 +463,7 @@ async def events(
     bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
     type: str | None = Query(default=None, description="e.g. DARK_VESSEL"),
     limit: int = Query(default=5_000, ge=1, le=50_000),
+    as_of: dt.datetime | None = AS_OF_QUERY,
 ) -> dict[str, Any]:
     """Analyst events (dark vessels first among them), newest first, each with its evidence card.
 
@@ -455,17 +471,103 @@ async def events(
     batch at least 4-5 days after a pass, so no event is live.
     """
     box = _parse_bbox(bbox)
-    now = dt.datetime.now(dt.UTC)
+    now = _looking_from(as_of)
     with session_scope(_sessions()) as session:
-        found = EventRepository(session).in_bbox(box, event_type=type, limit=limit)
+        found = EventRepository(session).in_bbox(box, event_type=type, until=now, limit=limit)
     return {
         "generated_at": now.isoformat(),
+        "as_of": _as_of_json(as_of, now),
         "bbox": _bbox_json(box),
         "count": len(found),
         "events": [_event_to_json(e, now) for e in found],
         "attribution": "Powered by Global Fishing Watch (CC BY-NC 4.0); "
         "contains modified Copernicus Sentinel data",
     }
+
+
+@app.get("/api/timeline")
+async def timeline(days: int = Query(default=60, ge=1, le=365)) -> dict[str, Any]:
+    """Every stored pass over each measured box in the last ``days``, oldest first.
+
+    For the console's timeline scrubber (PLAN §10 rule 4): each box's passes
+    as a band, showing when it was actually observed. A pass counts for a box
+    when its footprint holds the box centre; ``searched`` when the product
+    model searched that box on it (``detections`` stored now), ``fused`` when
+    it holds dark-vessel candidates in the box.
+    """
+    now = dt.datetime.now(dt.UTC)
+    since = now - dt.timedelta(days=days)
+    boxes = {name: box_around(*spec) for name, spec in MEASURED_AREAS.items()}
+    everywhere = BBox(
+        min(b.min_lon for b in boxes.values()),
+        min(b.min_lat for b in boxes.values()),
+        max(b.max_lon for b in boxes.values()),
+        max(b.max_lat for b in boxes.values()),
+    )
+    with session_scope(_sessions()) as session:
+        scenes = [
+            (
+                s.id,
+                s.product_name,
+                s.satellite,
+                _utc(s.acq_time),
+                parse_polygon_wkt(s.footprint_wkt),
+            )
+            for s in SceneRepository(session).intersecting(
+                everywhere, since=since, until=now, limit=5_000
+            )
+        ]
+        windows = [
+            w
+            for w in AnalysedWindowRepository(session).recent(everywhere, since=since, until=now)
+            if (w.detector, w.detector_version) == (PRODUCT_DETECTOR, PRODUCT_VERSION)
+        ]
+        events = EventRepository(session).in_bbox(everywhere, event_type="DARK_VESSEL", until=now)
+    scenes.sort(key=lambda scene: scene[3])
+    areas = []
+    for name, (lon, lat, _) in MEASURED_AREAS.items():
+        box = boxes[name]
+        passes = []
+        for scene_id, product_name, satellite, acquired, footprint in scenes:
+            if not footprint or not point_in_polygon(lon, lat, footprint):
+                continue
+            searches = [w for w in windows if w.scene_id == scene_id and w.bbox.contains(lon, lat)]
+            passes.append(
+                {
+                    "scene_id": scene_id,
+                    "product_name": product_name,
+                    "satellite": satellite,
+                    "acq_time": acquired.isoformat(),
+                    "searched": bool(searches),
+                    "detections": sum(w.detections for w in searches),
+                    "fused": any(
+                        e.scene_id == scene_id and box.contains(e.lon, e.lat) for e in events
+                    ),
+                }
+            )
+        areas.append(
+            {"name": name, "region": REGIONS[name], "lon": lon, "lat": lat, "passes": passes}
+        )
+    return {
+        "generated_at": now.isoformat(),
+        "since": since.isoformat(),
+        "days": days,
+        "areas": areas,
+        "attribution": "Contains modified Copernicus Sentinel data",
+    }
+
+
+def _looking_from(as_of: dt.datetime | None) -> dt.datetime:
+    """The moment the console looks from: now, or an earlier one from the timeline scrubber."""
+    now = dt.datetime.now(dt.UTC)
+    if as_of is None:
+        return now
+    moment = as_of if as_of.tzinfo else as_of.replace(tzinfo=dt.UTC)
+    return min(moment.astimezone(dt.UTC), now)
+
+
+def _as_of_json(as_of: dt.datetime | None, looking_from: dt.datetime) -> str | None:
+    return None if as_of is None else looking_from.isoformat()
 
 
 @app.get("/api/events/{event_id}/chip/{pol}")
