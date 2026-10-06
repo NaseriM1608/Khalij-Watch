@@ -11,6 +11,11 @@ Fixed on 2026-10-05, before the Iranian-coast results were read:
 - ``unseen_datatakes``: only passes whose datatake (satellite and datatake
   id) has no frame in the given index splits (train and val): the pair rule
   left out frames, not whole passes (scripts/list_pairs.py).
+- ``persistent_masked`` (fixed 2026-10-06, before its results were read):
+  detections of both detectors within core.persistence.RADIUS_M of a
+  persistent spot (--spots, built from earlier passes) are left out; GFW's
+  references are kept, so hiding a long-moored ship GFW reports costs
+  recall. Judge it only on passes after the spots' archive.
 
 Each stratum's results are written to --work and scored by
 compare_cfar_model.summarise, so the scoring is the comparison's own. Whether
@@ -38,6 +43,7 @@ sys.path.insert(0, str(ROOT))
 from core.areas import box_around  # noqa: E402
 from core.db.spatial import BBox  # noqa: E402
 from core.fusion.prefilter import distance_to_land_m  # noqa: E402
+from core.persistence import Spot, load_spots, spot_near  # noqa: E402
 from core.sar.coastline import LandPolygon, load_land  # noqa: E402
 from scripts.compare_cfar_model import (  # noqa: E402
     AREAS,
@@ -92,6 +98,22 @@ def away_from_land(result: dict, land: Sequence[LandPolygon], min_m: float) -> d
     }
 
 
+def without_spots(result: dict, spots: Sequence[Spot]) -> dict:
+    """A copy of a pass result without the detections near a persistent spot; references kept."""
+
+    def free(lon: float, lat: float) -> bool:
+        return spot_near(lon, lat, spots) is None
+
+    return {
+        **result,
+        "cfar": [x for x in result["cfar"] if free(x[0], x[1])],
+        "models": {
+            label: {**model, "peaks": [p for p in model["peaks"] if free(p[0], p[1])]}
+            for label, model in result["models"].items()
+        },
+    }
+
+
 def land_near(box: BBox) -> list[LandPolygon]:
     m = LAND_MARGIN_DEG
     return load_land(bbox=BBox(box.min_lon - m, box.min_lat - m, box.max_lon + m, box.max_lat + m))
@@ -118,6 +140,9 @@ def main() -> int:
         "--index", type=Path, help="index for the unseen-datatake strata (omit to skip them)"
     )
     parser.add_argument("--splits", default="train,val")
+    parser.add_argument(
+        "--spots", type=Path, help="persistent spots (scripts/build_persistence.py)"
+    )
     parser.add_argument("--threshold", action="append", type=parse_threshold, default=[])
     args = parser.parse_args()
     if not args.out.is_dir() or not any(p.name != "summary.json" for p in args.out.glob("*.json")):
@@ -137,6 +162,10 @@ def main() -> int:
         strata[f"unseen_datatakes_{shore}"] = [
             r for r, keep in zip(away, unseen, strict=True) if keep
         ]
+    if args.spots:
+        _, spots = load_spots(args.spots)
+        strata["persistent_masked"] = [without_spots(r, spots) for r in results]
+        strata[f"persistent_masked_{shore}"] = [without_spots(r, spots) for r in away]
     report = {}
     for name, members in strata.items():
         report[name] = stratum_summary(work, name, members, thresholds)

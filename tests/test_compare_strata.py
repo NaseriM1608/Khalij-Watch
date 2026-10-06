@@ -113,3 +113,53 @@ def test_main_refuses_a_folder_without_results(tmp_path, monkeypatch):
     monkeypatch.setattr(sys, "argv", ["strata", "--out", str(tmp_path), "--shore-m", "1000"])
     with pytest.raises(SystemExit):
         strata.main()
+
+
+def test_detections_at_persistent_spots_are_left_out_but_gfw_references_are_kept():
+    """Hiding a long-moored ship GFW reports must cost recall, so references stay."""
+    from core.persistence import Spot
+
+    spot = Spot(56.45, 25.20, "fujairah", 5, 10, "2024-01-01", "2025-11-03")
+    r = result(
+        cfar=[[56.4505, 25.2005], [56.50, 25.25]],
+        peaks=[[56.4505, 25.2005, 0.9], [56.50, 25.25, 0.8]],
+        refs=[[56.45, 25.20, 1, False]],
+    )
+
+    kept = strata.without_spots(r, [spot])
+
+    assert kept["cfar"] == [[56.50, 25.25]]
+    assert kept["models"]["run2"]["peaks"] == [[56.50, 25.25, 0.8]]
+    assert kept["refs"] == r["refs"]
+
+
+def test_main_adds_the_persistent_spot_strata_when_given_spots(tmp_path, monkeypatch):
+    from core.persistence import Spot, save_spots
+
+    out = tmp_path / "compare_x"
+    out.mkdir()
+    at_spot, elsewhere = [56.45, 25.20], [56.47, 25.22]
+    path = compare.result_path(out, "fujairah", OTHER)
+    path.write_text(
+        json.dumps(
+            result(
+                [at_spot, elsewhere],
+                [[*at_spot, 0.9], [*elsewhere, 0.9]],
+                [[*elsewhere, 1, True]],
+                OTHER,
+            )
+        )
+    )
+    spots = tmp_path / "spots.json"
+    save_spots(spots, [Spot(*at_spot, "fujairah", 5, 10, "2024-01-01", "2025-11-03")], {})
+    monkeypatch.setattr(strata, "land_near", lambda _box: LAND)
+    work = tmp_path / "work"
+    argv = ["strata", "--out", str(out), "--work", str(work), "--shore-m", "1000"]
+    monkeypatch.setattr(sys, "argv", [*argv, "--spots", str(spots), "--threshold", "run2=0.6"])
+
+    assert strata.main() == 0
+
+    report = json.loads((work / "strata.json").read_text(encoding="utf-8"))
+    assert report["all"]["table"]["same_cell"]["all"]["run2"]["fp"] == 1
+    assert report["persistent_masked"]["table"]["same_cell"]["all"]["run2"]["fp"] == 0
+    assert "persistent_masked_shore_1000m" in report

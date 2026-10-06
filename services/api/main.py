@@ -55,6 +55,7 @@ from core.db.repository import (
 from core.db.session import create_all, create_db_engine, make_session_factory, session_scope
 from core.db.spatial import BBox
 from core.fusion.chips import chip_file, chip_file_at, chip_index, image_in_index
+from core.persistence import load_spots, spot_near
 from core.sar.catalogue import parse_polygon_wkt
 
 logger = logging.getLogger(__name__)
@@ -490,9 +491,42 @@ async def event_chip(
     return FileResponse(path, media_type="image/png", headers={"Cache-Control": "no-cache"})
 
 
-def _chips_root() -> Path:
+def _data_dir() -> Path:
     settings = _state.get("settings")
-    return (settings.data_dir if settings else Path("data")) / "chips"
+    return settings.data_dir if settings else Path("data")
+
+
+def _chips_root() -> Path:
+    return _data_dir() / "chips"
+
+
+_spot_cache: dict[str, Any] = {}
+
+
+def _spots() -> list:
+    """Persistent spots (scripts/build_persistence.py), re-read when the file changes; [] without it."""
+    path = _data_dir() / "reference" / "persistent_spots.json"
+    try:
+        key = (path, path.stat().st_mtime_ns)
+    except OSError:
+        return []
+    if _spot_cache.get("key") != key:
+        _spot_cache.update(key=key, spots=load_spots(path)[1])
+    return _spot_cache["spots"]
+
+
+def _persistent(lon: float, lat: float) -> dict[str, Any] | None:
+    """The persistent spot at a position: likely a fixed object or a long-moored ship; else None."""
+    spot = spot_near(lon, lat, _spots())
+    if spot is None:
+        return None
+    return {
+        "area": spot.area,
+        "passes_seen": spot.passes_seen,
+        "passes_imaged": spot.passes_imaged,
+        "first": spot.first,
+        "last": spot.last,
+    }
 
 
 def _event_to_json(event: EventView, now: dt.datetime) -> dict[str, Any]:
@@ -509,6 +543,8 @@ def _event_to_json(event: EventView, now: dt.datetime) -> dict[str, Any]:
         "run": event.run,
         "acknowledged": event.acknowledged,
         "evidence": event.evidence,
+        # Marked, never hidden: something was detected here on many earlier passes.
+        "persistent": _persistent(event.lon, event.lat),
     }
 
 
@@ -553,6 +589,8 @@ def _detection_to_json(
         # measured box at least 1 km from land (core/areas.py); null otherwise.
         "accuracy": accuracy,
         "tested": accuracy is not None,
+        # Marked, never hidden: something was detected here on many earlier passes.
+        "persistent": _persistent(detection.lon, detection.lat),
         # The detection's image on disk, or null until it is cut.
         "chip": image_in_index(
             indexes.get(detection.product_name, {}), detection.lon, detection.lat

@@ -117,6 +117,8 @@ export interface SarDetection {
   tested?: boolean;
   /** The detection's satellite image on disk; null until it is cut. */
   chip?: ChipImage | null;
+  /** Something was detected here on many earlier passes (core/persistence.py); marked, never hidden. */
+  persistent?: PersistentSpot | null;
 }
 
 /** Precision and recall measured against GFW in the detection's region (core/areas.py). */
@@ -271,6 +273,15 @@ export interface DarkEvidence {
   attribution: string;
 }
 
+/** A spot where the model detected something on many archive passes (scripts/build_persistence.py). */
+export interface PersistentSpot {
+  area: string;
+  passes_seen: number;
+  passes_imaged: number;
+  first: string;
+  last: string;
+}
+
 export interface AnalystEvent {
   id: number;
   event_type: string;
@@ -285,6 +296,8 @@ export interface AnalystEvent {
   run: string | null;
   acknowledged: boolean;
   evidence: DarkEvidence;
+  /** Something was detected here on many earlier passes (core/persistence.py); marked, never hidden. */
+  persistent?: PersistentSpot | null;
 }
 
 export interface EventsResponse {

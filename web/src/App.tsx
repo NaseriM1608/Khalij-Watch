@@ -28,6 +28,7 @@ import {
   NearestAis,
   Polarisation,
   RADAR_COLOUR,
+  PersistentSpot,
   SarDetection,
   ScenesResponse,
   Track,
@@ -239,6 +240,11 @@ export default function App() {
             b.ts.localeCompare(a.ts) || TIERS.indexOf(tierOf(a)) - TIERS.indexOf(tierOf(b)),
         )
         .slice(0, FEED_LENGTH),
+    [dark],
+  );
+
+  const darkAtSpots = useMemo(
+    () => (dark?.events ?? []).filter((event) => event.persistent).length,
     [dark],
   );
 
@@ -469,6 +475,13 @@ export default function App() {
               </li>
             ))}
           </ul>
+          {darkAtSpots > 0 && (
+            <p className="hint">
+              {darkAtSpots} of them {darkAtSpots === 1 ? "lies" : "lie"} at persistent spots,
+              where something was detected on many earlier passes: likely fixed objects or ships
+              moored for months (marked on their cards).
+            </p>
+          )}
           {showDark && feed.length > 0 && (
             <ol className="dark-feed" aria-label="Dark-vessel candidates, newest pass first">
               {feed.map((event) => (
@@ -491,6 +504,7 @@ export default function App() {
                         {event.evidence.gate.nearest_gap_m == null
                           ? "no AIS vessel near"
                           : `${Math.round(event.evidence.gate.nearest_gap_m)} m outside nearest AIS gate`}
+                        {event.persistent ? " · persistent spot" : ""}
                       </span>
                     </span>
                   </button>
@@ -774,6 +788,16 @@ function formatMetres(metres: number | null): string {
 /** An AIS presence cell is 0.01 degree: about 1 km, where the vessel was during that hour. */
 const AIS_CELL_DEG = 0.01;
 
+/** Why a detection at a persistent spot is probably not a vessel that switched AIS off. */
+function persistentNote(spot: PersistentSpot): string {
+  return (
+    "Persistent spot: something was detected within 150 m of here on " +
+    `${spot.passes_seen} of ${spot.passes_imaged} earlier passes (${spot.first} to ` +
+    `${spot.last}). Likely a fixed object - a jetty, mooring, buoy or unmapped platform - ` +
+    "or a ship moored for months."
+  );
+}
+
 // Global Fishing Watch reports no vessel within about 1 km of land (core/areas.py).
 const NEAR_SHORE_M = 1000;
 const REGION_NAMES = { uae: "UAE study box", iran: "Iranian coast box" } as const;
@@ -1014,6 +1038,10 @@ function DetectionDetail({
         )}
       </dl>
 
+      {detection.persistent && (
+        <p className="caveat">{persistentNote(detection.persistent)}</p>
+      )}
+
       <p className="hint">
         The model says where it sees a vessel, not what it is: it has no class,
         length or heading output, and at 10 m radar pixels a tanker and a bulk
@@ -1065,6 +1093,7 @@ function DarkVesselDetail({ event, onClose }: { event: AnalystEvent; onClose: ()
             a gap in the feed would look like dark vessels.
           </p>
         )}
+        {event.persistent && <p className="caveat">{persistentNote(event.persistent)}</p>}
       </div>
 
       <dl className="stats stacked">
