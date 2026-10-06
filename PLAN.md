@@ -2684,3 +2684,45 @@ backfilled: 4 of the 377 product detections lie within 1 km), and its card
 quotes its region's Sentinel-1C/1D numbers from the >= 1 km scoring (UAE
 precision 0.59, recall 0.92; Iran 0.51, 0.91); near shore, with an unknown
 distance or outside the boxes, the card says why accuracy is unmeasured.
+
+### 2026-10-06 - Dark-vessel candidates off Iran
+
+The user chose dark-vessel candidates on the Iranian coast next. The newest
+Iranian passes (2-4 October) were too young for GFW (presence about 96 h,
+SAR detections about 5 days), so each box took its newest S1C/S1D pass at
+least 5 days old (25-30 September): the product model on it
+(`detect_window.py --scene`), then Phase 6 v1 fusion unchanged
+(`fuse_scene.py --scene`: GFW hourly presence, margin 0 m chosen on UAE
+validation passes, pre-filters fixed a priori), detached
+(`data/logs/run_dark_iran.sh`, 17 min, none failed). One pass often covers
+two boxes, and storing a box's events deleted the pass's other events: fixed
+first (`7b484e7`, events are now replaced per box).
+
+| Box (pass) | Detections | Kept | Dark | AIS vessels in box | GFW refs (AIS-matched) |
+|---|---|---|---|---|---|
+| Bandar Abbas (S1D 09-27 02:14) | 54 | 51 | 33 | 21 | 39 (14) |
+| Larak/Hormuz (same pass) | 14 | 10 | 7 | 2 | 8 (1) |
+| Kish (S1C 09-30 14:24) | 4 | 4 | 1 | 7 | 4 (1) |
+| Assaluyeh (S1D 09-29 14:32) | 6 | 6 | 1 | 5 | 5 (4) |
+| Bushehr (S1D 09-30 02:38) | 14 | 14 | 12 | 2 | 9 (1) |
+| Kharg (same pass) | 15 | 5 | 2 | 8 | 4 (2) |
+| Jask (S1C 09-25 14:15) | 2 | 0 | 0 | 15 | 2 (1) |
+
+56 candidates (high 16, medium 28, low 12), each with its image on the
+console's card and in the alert feed (checked in the browser). Only Bandar
+Abbas had enough GFW AIS-matched detections to check the pass for an AIS gap
+(none found); the other six are unguarded in v1's sense.
+
+- GFW's own radar agrees on 32 (a vessel without AIS in the same cell), sees
+  nothing in 19 cells and matched 5 to AIS.
+- 24 of the 56 lie within 300 m of spots where the model raised a
+  GFW-unmatched detection on at least 3 other passes of the validation sets
+  (Bandar Abbas 13 of 33, Bushehr 6 of 12, Larak 3 of 7, Assaluyeh 1, Kharg
+  1): likely fixed objects or ships moored for months, not vessels that
+  switched AIS off. Of these 24, GFW sees nothing in 12 cells (consistent
+  with GFW removing a fixed object), reports a vessel without AIS in 9, and
+  matched 3 to AIS.
+- As expected off Iran, where AIS is sparse, the candidate share is high (56
+  of 90 kept detections); it mostly measures missing AIS, and v1 is
+  conservative (hourly presence, PLAN §17 Phase 6 v1). A candidate is not a
+  verdict.
