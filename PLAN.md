@@ -2770,3 +2770,33 @@ removing them would do.
   and the legend counts candidates at spots. Under the rule, 9 of 486 stored
   product detections and 1 of the 65 candidates are marked (checked in the
   browser).
+
+### 2026-10-06 - Phase 7: the timeline scrubber
+
+PLAN §10 rule 4 (`9408161`): a bar under the map with one row per measured
+box (5 UAE, 7 Iran) and a tick for every stored pass whose footprint holds
+the box centre: grey imaged, yellow searched by the product model, red with
+dark-vessel candidates. Over the last 60 days the boxes were imaged 6 to 11
+times each (stored scenes begin on 2026-08-28; the bar says "stored").
+Clicking or dragging sets the moment the console looks from; releasing near
+a pass snaps to just after it, the later part of the bar is shaded, and
+"Live" returns to now.
+
+- API: `as_of` on `/api/scenes`, `/api/detections`, `/api/analysed` and
+  `/api/events` replaces "now" (clamped to now): only passes acquired by
+  then count, fused passes too, and every age is measured from it, so the
+  map's age styling and the rail's last radar look describe that moment.
+  `/api/timeline` serves the bands.
+- Checked in the browser: as of 2026-09-27 02:15 UTC the map holds 3
+  footprints, 240 detections and the 49 candidates of the Fujairah, Bandar
+  Abbas and Larak passes; as of 2026-09-10 02:07 the Fujairah pass's 170
+  detections and 9 candidates; Live restores 486 and 65; hiding the bar
+  gives the map its height back.
+- Limits: AIS (a stale synthetic demo set) does not follow the moment;
+  fusion ran days after each pass, so "as of" a pass time shows candidates
+  that were only known later (the card gives the pass age and the run).
+
+The 2-4 October Iranian passes are prepared for fusion
+(`data/logs/run_dark_iran_newest.sh`, detections and chips already stored):
+fusable from 7 October (Kish, Assaluyeh) to 9 October 14:42 UTC (Bushehr,
+Kharg); the runner skips passes still too young and can be relaunched.
