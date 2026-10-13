@@ -55,6 +55,9 @@ ignore = ["E501"]
 # Persian thesis text (letters, digits, separators) is intended there.
 "scripts/make_reports.py" = ["RUF001", "RUF002", "RUF003"]
 "tests/test_make_reports.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/report_docx/*.py" = ["RUF001", "RUF002", "RUF003"]
+"scripts/build_report_docx.py" = ["RUF001", "RUF002", "RUF003"]
+"tests/test_report_docx*.py" = ["RUF001", "RUF002", "RUF003"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
