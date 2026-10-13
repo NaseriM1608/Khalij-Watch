@@ -1,0 +1,10 @@
+\begin{tikzpicture}[box/.style={draw,rounded corners=2pt,text width=3.7cm,minimum height=1.4cm,align=center,font=\small},arr/.style={-{Stealth[length=2.5mm]},thick},node distance=0.65cm and 0.7cm]
+\node[box,fill=gray!8] (input) {\rl{ورودی دو باند نرمال‌شده}\\\lr{VV / VH}\\\rl{برش آموزش ۹۶ پیکسل}};
+\node[box,fill=blue!8,right=of input] (enc) {\lr{EfficientNet-B0}\\\rl{پنج مقیاس ویژگی}\\\rl{گام‌های ۲ تا ۳۲}};
+\node[box,fill=teal!8,right=of enc] (dec) {\lr{U-Net decoder}\\\rl{چهار بلوک و اتصال میان‌بُر}\\\rl{خروجی با گام ۲}};
+\node[box,fill=orange!10,below=of enc] (heat) {\rl{سر حضور}\\\rl{یک logit در هر خانه}\\\rl{سیگموئید و قله محلی}};
+\node[box,fill=orange!10,below=of dec] (offset) {\rl{سر جابه‌جایی}\\\rl{دو مؤلفه زیرپیکسلی}\\\rl{مکان مرکز در تصویر}};
+\draw[arr] (input)--(enc);\draw[arr] (enc)--(dec);
+\draw[arr] (dec.south west)--(heat.north);\draw[arr] (dec)--(offset);
+\draw[arr,dashed] (enc.north) to[bend left=25] node[above,font=\small]{\rl{ویژگی‌های میان‌بُر}} (dec.north);
+\end{tikzpicture}

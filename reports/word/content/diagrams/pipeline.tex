@@ -1,0 +1,11 @@
+\begin{tikzpicture}[box/.style={draw,rounded corners=2pt,fill=blue!5,text width=3.8cm,minimum height=1.15cm,align=center,font=\small},arr/.style={-{Stealth[length=2.5mm]},thick},node distance=0.6cm and 0.7cm]
+\node[box] (sar) {\rl{تصویر Sentinel-1}\\\rl{دو باند VV و VH}};
+\node[box,right=of sar] (mask) {\rl{خواندن پنجره و ماسک}\\\rl{خشکی و سکوی فراساحلی}};
+\node[box,right=of mask] (labels) {\rl{پیشنهاد CFAR و مرجع GFW}\\\rl{مثبت، منفی، نادیده‌گرفته}};
+\node[box,below=of labels] (train) {\rl{آموزش مدل نقطه‌ای}\\\rl{انتخاب روی اعتبارسنجی}};
+\node[box,below=of mask] (model) {\rl{اجرای مدل ثابت}\\\rl{استخراج مکان و امتیاز}};
+\node[box,below=of sar] (chip) {\rl{برش VV و VH هر یافته}\\\rl{ذخیره و نمایش در کنسول}};
+\node[box,below=of model] (ais) {\rl{تلفیق ثانویه حضور AIS}\\\rl{نامزد و شواهد عدم تطبیق}};
+\draw[arr] (sar)--(mask);\draw[arr] (mask)--(labels);\draw[arr] (labels)--(train);
+\draw[arr] (train)--(model);\draw[arr] (mask)--(model);\draw[arr] (model)--(chip);\draw[arr] (model)--(ais);
+\end{tikzpicture}
