@@ -18,9 +18,10 @@ scientific evaluation is part of this work.
 - `phases_professor.md`: a separate formal Persian account of the completed
   phases for presenting to the professor. It retains the methods, results and
   limitations, removes private study/rehearsal instructions and repository
-  pointers, and leaves both original study PDFs unchanged.
+  pointers, and leaves both original study PDFs unchanged. At the user's
+  request it has no project nickname, inline citations or bibliography.
 
-The sources use the existing report markup and verified bibliography in
+The sources use the existing report markup. The study guides use the verified bibliography in
 `reports/word/content/references.md`. Existing diagrams and the saved Kish chip
 are reused. Current-code architecture checks explain structure; they are not
 new trained-model evaluations and do not prove exact reproduction of the

@@ -84,7 +84,9 @@ def test_professor_export_preserves_existing_study_pdfs(tmp_path, monkeypatch):
         assert (build / name).read_bytes() == payload
 
 
-def test_professor_document_uses_its_own_contents_title(tmp_path, monkeypatch):
+def test_professor_document_uses_its_own_contents_title_and_omits_project_name(
+    tmp_path, monkeypatch
+):
     metadata = {
         "author": "Author",
         "date": "2026",
@@ -95,6 +97,7 @@ def test_professor_document_uses_its_own_contents_title(tmp_path, monkeypatch):
                 "subtitle": "Professor copy",
                 "description": "Completed work",
                 "contents_title": "Professor contents",
+                "project_name": "",
             }
         },
     }
@@ -108,3 +111,4 @@ def test_professor_document_uses_its_own_contents_title(tmp_path, monkeypatch):
     paragraphs = ["".join(p.itertext()) for p in document.iter(W + "p")]
     assert "Professor contents" in paragraphs
     assert "Study contents" not in paragraphs
+    assert "khalij-watch" not in " ".join(paragraphs)

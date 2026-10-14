@@ -95,11 +95,21 @@ def assemble_guide(name: str, destination: Path) -> dict:
     )
     renderer = Renderer(numbers=numbers, tables={}, charts=images, references=refs)
     main = format_study_body(renderer.render(blocks))
+    project_name = info.get("project_name", "khalij-watch")
     cover = (
-        ooxml.paragraph(
-            ooxml.latin_runs("khalij-watch", size=18), align="center", before=1400, after=240
+        (
+            ooxml.paragraph(
+                ooxml.latin_runs(project_name, size=18), align="center", before=1400, after=240
+            )
+            if project_name
+            else ""
         )
-        + ooxml.paragraph(ooxml.text_runs(info["title"], bold=True), style="Title", align="center")
+        + ooxml.paragraph(
+            ooxml.text_runs(info["title"], bold=True),
+            style="Title",
+            align="center",
+            before=1400 if not project_name else None,
+        )
         + ooxml.paragraph(ooxml.text_runs(info["subtitle"], size=16), align="center", after=600)
         + ooxml.paragraph(
             ooxml.text_runs(info["description"]), style="StudyBody", align="right", after=600
