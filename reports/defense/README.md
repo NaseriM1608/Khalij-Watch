@@ -1,4 +1,4 @@
-# Persian defense-study guides
+# Persian defense and presentation documents
 
 These two guides explain the completed khalij-watch project for the student's
 study and presentation. They do not replace or revise the supervisor-approved
@@ -20,6 +20,11 @@ scientific evaluation is part of this work.
   limitations, removes private study/rehearsal instructions and repository
   pointers, and leaves both original study PDFs unchanged. At the user's
   request it has no project nickname, inline citations or bibliography.
+- `presentation.md`: a separate application demonstration guide with a spoken
+  10–15 minute script, a five-minute version, 64 likely professor questions,
+  short answers and follow-up explanations, real implementation problems,
+  startup instructions and presentation fallback steps. It has no project
+  nickname or bibliography and preserves all previous documents.
 
 The sources use the existing report markup. The study guides use the verified bibliography in
 `reports/word/content/references.md`. Existing diagrams and the saved Kish chip
@@ -40,6 +45,8 @@ python scripts/build_defense_guides.py
 python scripts/build_defense_guides.py --only technical
 # Build the separate professor copy without rebuilding the study PDFs:
 python scripts/build_defense_guides.py --only phases_professor
+# Build the application presentation script only:
+python scripts/build_defense_guides.py --only presentation
 
 .venv-docs/Scripts/python scripts/render_pdf.py reports/defense/build/phases.pdf --out reports/defense/build/render-phases --dpi 130
 .venv-docs/Scripts/python scripts/render_pdf.py reports/defense/build/technical.pdf --out reports/defense/build/render-technical --dpi 130
@@ -48,8 +55,9 @@ uv run --offline --no-project --with ruff ruff check scripts/report_docx scripts
 ```
 
 The study PDFs are `build/phases.pdf` and `build/technical.pdf`. The additional
-professor copy is `build/phases_professor.pdf`; it is selected explicitly with
-`--only phases_professor`. The default command still builds only the two study
+professor copy is `build/phases_professor.pdf`, and the presentation script is
+`build/presentation.pdf`; select them explicitly with `--only phases_professor`
+or `--only presentation`. The default command still builds only the two study
 guides. Intermediate Word
 files, render images, architecture-check output and all build artifacts are
 ignored by Git. Inspect every PDF page after changes, including equations,

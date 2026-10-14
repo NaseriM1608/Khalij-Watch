@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import sys
@@ -39,7 +40,16 @@ def format_study_body(xml: str) -> str:
         first_end = table.index("</w:tr>") + len("</w:tr>")
         return table[:first_end] + table[first_end:].replace("<w:keepNext/>", "")
 
-    return re.sub(r"<w:tbl>.*?</w:tbl>", allow_long_table, xml, flags=re.S)
+    xml = re.sub(r"<w:tbl>.*?</w:tbl>", allow_long_table, xml, flags=re.S)
+
+    def latin_paragraph(m: re.Match) -> str:
+        paragraph = m.group(0)
+        text = html.unescape("".join(re.findall(r"<w:t[^>]*>(.*?)</w:t>", paragraph)))
+        if 'w:val="StudyBody"' not in paragraph or not text or not text.isascii():
+            return paragraph
+        return ooxml.paragraph(ooxml.latin_runs(text), style="StudyBody", rtl=False, align="left")
+
+    return re.sub(r"<w:p>.*?</w:p>", latin_paragraph, xml, flags=re.S)
 
 
 def study_styles() -> str:
@@ -137,7 +147,9 @@ def assemble_guide(name: str, destination: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--only", choices=("phases", "technical", "phases_professor"))
+    parser.add_argument(
+        "--only", choices=("phases", "technical", "phases_professor", "presentation")
+    )
     args = parser.parse_args()
     for name in (args.only,) if args.only else ("phases", "technical"):
         target = GUIDES / "build" / f"{name}.docx"
