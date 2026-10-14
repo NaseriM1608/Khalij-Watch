@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import xml.etree.ElementTree as ET
+import zipfile
 
+from scripts import build_defense_guides
 from scripts.build_defense_guides import format_study_body
 from scripts.report_docx import markup
 from scripts.report_docx.render import Renderer
@@ -50,3 +53,58 @@ def test_short_summary_table_stays_together():
     table = parsed(body).find(W + "tbl")
     for row in table.findall(W + "tr")[:-1]:
         assert all(p.find(f"{W}pPr/{W}keepNext") is not None for p in row.iter(W + "p"))
+
+
+def test_professor_export_preserves_existing_study_pdfs(tmp_path, monkeypatch):
+    build = tmp_path / "build"
+    build.mkdir()
+    preserved = {"phases.pdf": b"existing phases", "technical.pdf": b"existing technical"}
+    for name, payload in preserved.items():
+        (build / name).write_bytes(payload)
+    exported = []
+
+    def assemble(name, destination):
+        assert name == "phases_professor"
+        destination.write_bytes(b"new professor source")
+        return {"guide": name}
+
+    def export(source, destination):
+        exported.append(destination.name)
+        destination.with_suffix(".pdf").write_bytes(source.read_bytes())
+        return 0
+
+    monkeypatch.setattr(build_defense_guides, "GUIDES", tmp_path)
+    monkeypatch.setattr(build_defense_guides, "assemble_guide", assemble)
+    monkeypatch.setattr(build_defense_guides, "export_with_word", export)
+    monkeypatch.setattr("sys.argv", ["build_defense_guides.py", "--only", "phases_professor"])
+    assert build_defense_guides.main() == 0
+    assert exported == ["phases_professor.docx"]
+    assert (build / "phases_professor.pdf").read_bytes() == b"new professor source"
+    for name, payload in preserved.items():
+        assert (build / name).read_bytes() == payload
+
+
+def test_professor_document_uses_its_own_contents_title(tmp_path, monkeypatch):
+    metadata = {
+        "author": "Author",
+        "date": "2026",
+        "contents_title": "Study contents",
+        "guides": {
+            "phases_professor": {
+                "title": "Implementation phases",
+                "subtitle": "Professor copy",
+                "description": "Completed work",
+                "contents_title": "Professor contents",
+            }
+        },
+    }
+    (tmp_path / "meta.json").write_text(json.dumps(metadata), encoding="utf-8")
+    (tmp_path / "phases_professor.md").write_text("#* Implementation\n\nCompleted work.\n")
+    monkeypatch.setattr(build_defense_guides, "GUIDES", tmp_path)
+    destination = tmp_path / "professor.docx"
+    build_defense_guides.assemble_guide("phases_professor", destination)
+    with zipfile.ZipFile(destination) as package:
+        document = ET.fromstring(package.read("word/document.xml"))
+    paragraphs = ["".join(p.itertext()) for p in document.iter(W + "p")]
+    assert "Professor contents" in paragraphs
+    assert "Study contents" not in paragraphs

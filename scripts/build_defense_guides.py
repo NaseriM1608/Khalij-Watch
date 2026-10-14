@@ -1,4 +1,4 @@
-"""Build the two Persian defense-study guides without editing the accepted report."""
+"""Build Persian defense documents without editing the accepted report."""
 
 from __future__ import annotations
 
@@ -107,7 +107,10 @@ def assemble_guide(name: str, destination: Path) -> dict:
         + ooxml.paragraph(ooxml.text_runs(meta["author"], bold=True), align="center", after=240)
         + ooxml.paragraph(ooxml.text_runs(meta["date"]), align="center")
         + ooxml.page_break()
-        + ooxml.paragraph(ooxml.text_runs(meta["contents_title"], bold=True, size=18), after=240)
+        + ooxml.paragraph(
+            ooxml.text_runs(info.get("contents_title", meta["contents_title"]), bold=True, size=18),
+            after=240,
+        )
         + ooxml.paragraph(ooxml.field('TOC \\h \\z \\t "StudyHeading2,1"'))
         + ooxml.page_break()
     )
@@ -124,7 +127,7 @@ def assemble_guide(name: str, destination: Path) -> dict:
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--only", choices=("phases", "technical"))
+    parser.add_argument("--only", choices=("phases", "technical", "phases_professor"))
     args = parser.parse_args()
     for name in (args.only,) if args.only else ("phases", "technical"):
         target = GUIDES / "build" / f"{name}.docx"

@@ -15,6 +15,10 @@ scientific evaluation is part of this work.
   metrics and methodological limits. Worked educational examples are explicitly
   distinguished from project measurements.
 - `meta.json`: Persian cover metadata.
+- `phases_professor.md`: a separate formal Persian account of the completed
+  phases for presenting to the professor. It retains the methods, results and
+  limitations, removes private study/rehearsal instructions and repository
+  pointers, and leaves both original study PDFs unchanged.
 
 The sources use the existing report markup and verified bibliography in
 `reports/word/content/references.md`. Existing diagrams and the saved Kish chip
@@ -33,6 +37,8 @@ are required. No package download is needed in the configured local workspace.
 python scripts/build_defense_guides.py
 # Or rebuild one guide:
 python scripts/build_defense_guides.py --only technical
+# Build the separate professor copy without rebuilding the study PDFs:
+python scripts/build_defense_guides.py --only phases_professor
 
 .venv-docs/Scripts/python scripts/render_pdf.py reports/defense/build/phases.pdf --out reports/defense/build/render-phases --dpi 130
 .venv-docs/Scripts/python scripts/render_pdf.py reports/defense/build/technical.pdf --out reports/defense/build/render-technical --dpi 130
@@ -40,7 +46,10 @@ python scripts/build_defense_guides.py --only technical
 uv run --offline --no-project --with ruff ruff check scripts/report_docx scripts/build_report_docx.py scripts/build_defense_guides.py tests/test_report_docx*.py
 ```
 
-Deliverables are `build/phases.pdf` and `build/technical.pdf`. Intermediate Word
+The study PDFs are `build/phases.pdf` and `build/technical.pdf`. The additional
+professor copy is `build/phases_professor.pdf`; it is selected explicitly with
+`--only phases_professor`. The default command still builds only the two study
+guides. Intermediate Word
 files, render images, architecture-check output and all build artifacts are
 ignored by Git. Inspect every PDF page after changes, including equations,
 multi-page tables, references and mixed Persian/Latin text. The guide builder
