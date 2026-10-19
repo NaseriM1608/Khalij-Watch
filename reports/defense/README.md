@@ -25,6 +25,10 @@ scientific evaluation is part of this work.
   short answers and follow-up explanations, real implementation problems,
   startup instructions and presentation fallback steps. It has no project
   nickname or bibliography and preserves all previous documents.
+- `phase1_report.md`: a one-page Persian brief for the professor, with three
+  paragraphs and four bullet points about Phase 1 AIS ingestion, storage,
+  API and initial map, including the observed live-coverage limitation.
+  Output: `build/phase1_report.pdf`, without a cover page or bibliography.
 
 The sources use the existing report markup. The study guides use the verified bibliography in
 `reports/word/content/references.md`. Existing diagrams and the saved Kish chip
