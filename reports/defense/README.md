@@ -29,6 +29,12 @@ scientific evaluation is part of this work.
   paragraphs and four bullet points about Phase 1 AIS ingestion, storage,
   API and initial map, including the observed live-coverage limitation.
   Output: `build/phase1_report.pdf`, without a cover page or bibliography.
+- `phase1_5_report.md` and `phase2_report.md` through `phase8_report.md`:
+  eight additional one-page Persian briefs for professor review. Each contains
+  three paragraphs and four bullets covering completed work, actual problems,
+  departures from the plan, responses and remaining limitations. Outputs use
+  the same stems under `build/`. The existing Phase 1 brief is preserved.
+  No project nickname, bibliography or cover pages are included.
 
 The sources use the existing report markup. The study guides use the verified bibliography in
 `reports/word/content/references.md`. Existing diagrams and the saved Kish chip
