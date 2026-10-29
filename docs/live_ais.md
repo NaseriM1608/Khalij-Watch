@@ -7,14 +7,8 @@ positions is advanced to the present.
 
 ## Run locally on Windows
 
-From the repository root, start the AIS worker in its own terminal:
-
-```powershell
-$env:OPENWATERS_ENABLED = "1"
-.venv-eval/Scripts/python -m services.ais_ingest.worker
-```
-
-Start the API in another terminal, then the web client:
+From the repository root, start the API. It automatically starts its AIS worker
+and enables the free Open Waters feed by default:
 
 ```powershell
 .venv-eval/Scripts/python -m uvicorn services.api.main:app --host 127.0.0.1 --port 8000
@@ -25,15 +19,38 @@ cd web
 npm run dev
 ```
 
-Open http://127.0.0.1:5173. The API alone does not collect AIS. The worker must
-remain running for fresh observations. `OPENWATERS_ENABLED` is opt-in and does
-not require an account or key. Existing configured feeds remain supported.
-Avoid concurrent duplicate workers: the anonymous provider limits connections
-per network address. The normal worker reconnects with backoff; HTTP 429 adds
-a longer wait. Stop the worker with Ctrl+C when finished.
+Open http://127.0.0.1:5173. No separate worker terminal is needed. Starting the
+backend starts one receiver; closing the backend stops the receiver and flushes
+pending reports. Opening another browser tab does not create another worker.
+The frontend alone cannot start the backend.
+
+Use one API server process. Do not also start the old standalone AIS worker:
+the anonymous provider limits concurrent connections. The receiver reconnects
+with backoff; HTTP 429 adds a longer wait. An active worker does not guarantee
+fresh reports when the provider has gaps or outages; the UI shows both states.
+
+`OPENWATERS_ENABLED=0` disables that feed, and `AIS_AUTOSTART_ENABLED=0` disables
+the API-owned receiver for offline use or an explicitly separate worker. If a
+previous shell or configuration disabled these settings, set them back to `1`
+to enable automatic reception. No key or account is required for Open Waters.
+Existing configured feeds remain supported.
 
 The current local evaluation environment was repaired with hash-verified mirror
 packages. No package download occurs when starting these commands.
+
+## Transponder identity and type
+
+The vessel card shows the MMSI from AIS position reports. When static AIS
+reports arrive, the same MMSI links the reported name, call sign, IMO number
+and type. These fields can arrive later or remain unavailable. The card keeps
+missing identity/type unknown and distinguishes reported cargo and tanker
+types; it does not infer them from the radar image. Static identity updates
+never freshen the position timestamp.
+
+This is broadcast identity, not authentication or independent registry
+verification. A ship detected only in a radar image cannot be reliably named
+from that image alone. The [USCG AIS explanation](https://www.navcen.uscg.gov/ais-frequently-asked-questions)
+describes the separate position and static/voyage reports.
 
 ## What the map means
 

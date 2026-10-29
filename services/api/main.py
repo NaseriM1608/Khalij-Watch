@@ -101,14 +101,39 @@ _state: dict[str, Any] = {}
 
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
+    from services.ais_ingest import worker
+
     settings = load_settings()
     engine = create_db_engine(settings.database_url)
     create_all(engine)
     _state["settings"] = settings
     _state["sessions"] = make_session_factory(engine)
+    stop = asyncio.Event()
+    ais_task = None
+    if settings.ais_autostart_enabled:
+        ais_task = asyncio.create_task(
+            worker.run(
+                settings,
+                sessions=_state["sessions"],
+                stop=stop,
+                install_signals=False,
+            )
+        )
+        _state["ais_worker"] = ais_task
     logger.info("API ready; AOI=%s", settings.gulf_bbox)
-    yield
-    _state.clear()
+    try:
+        yield
+    finally:
+        stop.set()
+        if ais_task is not None:
+            try:
+                await asyncio.wait_for(ais_task, timeout=5)
+            except (TimeoutError, asyncio.CancelledError):
+                logger.warning("AIS worker shutdown exceeded its grace period")
+            except Exception:
+                logger.exception("AIS worker stopped unexpectedly")
+        _state.clear()
+        engine.dispose()
 
 
 app = FastAPI(title="khalij-watch", version="0.1.0", lifespan=lifespan)
@@ -161,6 +186,9 @@ def _fix_to_json(fix: VesselFix, now: dt.datetime, *, estimates: bool = True) ->
         "cog_deg": fix.cog_deg,
         "heading_deg": fix.heading_deg,
         "name": fix.name,
+        "imo": fix.imo,
+        "callsign": fix.callsign,
+        "ship_type": fix.ship_type,
         "coarse_class": fix.coarse_class,
         "source": fix.source,
         "plausibility_score": fix.plausibility_score,
@@ -208,6 +236,7 @@ async def health() -> dict[str, Any]:
         "live_feeds": settings.describe_feeds() if settings else [],
         # Surfaced so the UI can warn when it is showing seeded, not live, data.
         "has_live_ais": bool(fresh),
+        "ais_worker_running": bool(_state.get("ais_worker") and not _state["ais_worker"].done()),
         "fresh_ais_vessels": len(fresh),
         "ais_status": "fresh" if fresh else "stale" if observed else "no_observations",
         "latest_ais_at": max((f.ts for f in observed), default=None),

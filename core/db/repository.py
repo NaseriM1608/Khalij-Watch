@@ -121,6 +121,9 @@ class VesselFix:
     received_at: dt.datetime | None = None
     provider_source: str | None = None
     provider_reencoded: bool | None = None
+    imo: int | None = None
+    callsign: str | None = None
+    ship_type: int | None = None
 
     @property
     def is_suspect(self) -> bool:
@@ -252,7 +255,7 @@ class PositionRepository:
             SELECT c.mmsi, c.lon, c.lat, c.ts, c.sog_kn, c.cog_deg, c.heading_deg,
                    c.source, c.plausibility_score, c.anomaly_flags,
                    c.timestamp_basis, c.received_at, c.provider_source, c.provider_reencoded,
-                   v.name, v.coarse_class
+                   v.name, v.coarse_class, v.imo, v.callsign, v.ship_type
             FROM candidates c
             LEFT JOIN vessels v ON v.mmsi = c.mmsi
             WHERE c.rn = 1
@@ -332,6 +335,9 @@ def _to_fix(row) -> VesselFix:
         provider_reencoded=bool(row["provider_reencoded"])
         if row["provider_reencoded"] is not None
         else None,
+        imo=row["imo"],
+        callsign=row["callsign"],
+        ship_type=row["ship_type"],
     )
 
 

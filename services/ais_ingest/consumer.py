@@ -156,6 +156,10 @@ class IngestConsumer:
             if self._batch.is_full:
                 self._flush()
 
+        # Producers have stopped before shutdown; retain their remaining messages.
+        while not self._queue.empty():
+            source, envelope = self._queue.get_nowait()
+            self._ingest(source, envelope)
         self._flush()  # do not lose a partial batch on shutdown
 
     def _ingest(self, source: str, envelope: dict[str, Any]) -> None:

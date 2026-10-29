@@ -20,6 +20,9 @@ export interface Vessel {
   cog_deg: number | null;
   heading_deg: number | null;
   name: string | null;
+  imo?: number | null;
+  callsign?: string | null;
+  ship_type?: number | null;
   coarse_class: CoarseClass | null;
   source: string;
   plausibility_score: number | null;
@@ -193,6 +196,7 @@ export interface Health {
   detections: number;
   live_feeds: string[];
   has_live_ais: boolean;
+  ais_worker_running?: boolean;
   fresh_ais_vessels: number;
   ais_status: "fresh" | "stale" | "no_observations";
   latest_ais_at: string | null;

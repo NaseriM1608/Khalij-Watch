@@ -41,6 +41,7 @@ class Settings:
     data_dir: Path
     openwaters_enabled: bool = False
     openwaters_url: str = "https://ais.openwaters.io/v1/stream"
+    ais_autostart_enabled: bool = True
 
     @property
     def has_live_ais(self) -> bool:
@@ -78,6 +79,9 @@ def load_settings(env_file: Path | None = None) -> Settings:
         hormuz_bbox=bbox("AOI_HORMUZ_BBOX", HORMUZ_BBOX),
         database_url=os.environ.get("DATABASE_URL") or None,
         data_dir=Path(os.environ.get("DATA_DIR", "data")),
-        openwaters_enabled=os.environ.get("OPENWATERS_ENABLED", "").lower() in {"1", "true", "yes"},
+        openwaters_enabled=os.environ.get("OPENWATERS_ENABLED", "1").lower()
+        in {"1", "true", "yes"},
         openwaters_url=os.environ.get("OPENWATERS_URL") or "https://ais.openwaters.io/v1/stream",
+        ais_autostart_enabled=os.environ.get("AIS_AUTOSTART_ENABLED", "1").lower()
+        in {"1", "true", "yes"},
     )

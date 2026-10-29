@@ -42,6 +42,7 @@ import {
   tierOf,
 } from "./api";
 import { faAge, faCoord, faDate, faDateTime, faMetres, faNumber, faTime } from "./fa";
+import { shipTypeLabel } from "./identity";
 
 const REFRESH_MS = 5000;
 // Detections change only when a detection job runs, so poll gently.
@@ -355,6 +356,9 @@ export default function App() {
 
         <section className="panel">
           <h2>گزارش AIS و تخمین کوتاه‌مدت</h2>
+          <p className="hint">
+            {health?.ais_worker_running ? "دریافت‌کننده AIS همراه برنامه فعال است." : "دریافت‌کننده خودکار AIS فعال نیست."}
+          </p>
           <p className="hint">
             {hasFreshAis
               ? `${faNumber(health.fresh_ais_vessels)} شناور با گزارش کمتر از پنج دقیقه`
@@ -758,6 +762,7 @@ function VesselDetail({
   onClose: () => void;
 }) {
   const key = classOf(vessel);
+  const reportedImo = vessel.imo ?? track?.imo;
   const [nowMs, setNowMs] = useState(Date.now());
   useEffect(() => {
     const timer = setInterval(() => setNowMs(Date.now()), 1000);
@@ -792,12 +797,20 @@ function VesselDetail({
           <dt>MMSI</dt>
           <dd>{vessel.mmsi}</dd>
         </div>
-        {track?.imo && (
+        {reportedImo && (
           <div>
             <dt>IMO</dt>
-            <dd>{track.imo}</dd>
+            <dd>{reportedImo}</dd>
           </div>
         )}
+        <div>
+          <dt>شناسه فراخوان</dt>
+          <dd>{vessel.callsign ?? "گزارش نشده"}</dd>
+        </div>
+        <div>
+          <dt>نوع اعلام‌شده AIS</dt>
+          <dd>{shipTypeLabel(vessel.ship_type)}</dd>
+        </div>
         <div>
           <dt>موقعیت</dt>
           <dd>{faCoord(vessel.lat, vessel.lon)}</dd>

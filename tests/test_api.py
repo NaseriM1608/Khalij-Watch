@@ -434,3 +434,29 @@ def test_detections_can_return_one_named_detector(client):
 
 def test_unknown_detector_is_rejected(client):
     assert client.get("/api/detections", params={"detector": "bogus"}).status_code == 422
+
+
+def test_vessel_card_receives_reported_identity_and_type(client):
+    with session_scope(api._state["sessions"]) as session:
+        VesselRepository(session).upsert_static(
+            VesselStatic(
+                mmsi=MMSI,
+                name="TEST TANKER",
+                imo=1234567,
+                callsign="TEST123",
+                ship_type=80,
+            )
+        )
+    vessel = client.get("/api/vessels").json()["vessels"][0]
+    assert vessel["name"] == "TEST TANKER"
+    assert vessel["imo"] == 1234567
+    assert vessel["callsign"] == "TEST123"
+    assert vessel["ship_type"] == 80
+
+
+def test_absent_static_identity_remains_unknown(client):
+    vessel = client.get("/api/vessels", params={"bbox": "0,45,20,55"}).json()["vessels"][0]
+    assert vessel["name"] is None
+    assert vessel["ship_type"] is None
+    assert vessel["imo"] is None
+    assert vessel["callsign"] is None

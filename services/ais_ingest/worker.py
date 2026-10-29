@@ -15,6 +15,8 @@ import signal
 import sys
 from urllib.parse import urlencode
 
+from sqlalchemy.orm import Session, sessionmaker
+
 from core.ais.aisstream import build_subscription
 from core.config import Settings, load_settings
 from core.db.session import create_all, create_db_engine, make_session_factory
@@ -77,7 +79,13 @@ async def report_stats(stats: IngestStats, stop: asyncio.Event) -> None:
         logger.info("ingest stats: %s", stats.as_dict())
 
 
-async def run(settings: Settings) -> int:
+async def run(
+    settings: Settings,
+    *,
+    sessions: sessionmaker[Session] | None = None,
+    stop: asyncio.Event | None = None,
+    install_signals: bool = True,
+) -> int:
     feeds = build_feeds(settings)
     openwaters = getattr(settings, "openwaters_enabled", False)
     if not feeds and not openwaters:
@@ -87,9 +95,11 @@ async def run(settings: Settings) -> int:
         )
         return 1
 
-    engine = create_db_engine(settings.database_url)
-    create_all(engine)
-    session_factory = make_session_factory(engine)
+    engine = None
+    if sessions is None:
+        engine = create_db_engine(settings.database_url)
+        create_all(engine)
+        sessions = make_session_factory(engine)
 
     queue: asyncio.Queue = asyncio.Queue(maxsize=DEFAULT_QUEUE_SIZE)
     stats = IngestStats()
@@ -99,29 +109,34 @@ async def run(settings: Settings) -> int:
         query = urlencode({"bbox": f"{box.min_lat},{box.min_lon},{box.max_lat},{box.max_lon}"})
         url = getattr(settings, "openwaters_url", "https://ais.openwaters.io/v1/stream")
         clients.append(OpenWatersClient(f"{url}?{query}", queue, stats=stats))
-    consumer = IngestConsumer(queue, session_factory, stats=stats)
+    consumer = IngestConsumer(queue, sessions, stats=stats)
 
-    stop = asyncio.Event()
-    _install_signal_handlers(stop)
+    stop = stop or asyncio.Event()
+    if install_signals:
+        _install_signal_handlers(stop)
 
     logger.info(
         "starting ingest: feeds=%s bbox=%s",
         [f.name for f in feeds] + (["openwaters"] if openwaters else []),
         settings.gulf_bbox,
     )
-    tasks = [asyncio.create_task(c.run()) for c in clients]
-    tasks.append(asyncio.create_task(consumer.run()))
-    tasks.append(asyncio.create_task(report_stats(stats, stop)))
-
-    await stop.wait()
-    logger.info("shutting down; final stats: %s", stats.as_dict())
-
-    for client in clients:
-        client.stop()
-    consumer.stop()
-    for task in tasks:
-        task.cancel()
-    await asyncio.gather(*tasks, return_exceptions=True)
+    feed_tasks = [asyncio.create_task(c.run()) for c in clients]
+    stats_task = asyncio.create_task(report_stats(stats, stop))
+    consumer_task = asyncio.create_task(consumer.run())
+    try:
+        await stop.wait()
+    finally:
+        stop.set()
+        for client in clients:
+            client.stop()
+        for task in [*feed_tasks, stats_task]:
+            task.cancel()
+        await asyncio.gather(*feed_tasks, stats_task, return_exceptions=True)
+        consumer.stop()
+        await asyncio.gather(consumer_task, return_exceptions=True)
+        if engine is not None:
+            engine.dispose()
+        logger.info("shutting down; final stats: %s", stats.as_dict())
     return 0
 
 
