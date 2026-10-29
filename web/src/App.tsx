@@ -354,322 +354,177 @@ export default function App() {
           </div>
         )}
 
-        <section className="panel">
-          <h2>گزارش AIS و تخمین کوتاه‌مدت</h2>
+        <section className="panel rail-status" aria-label="وضعیت داده‌ها">
+          <div className="status-line">
+            <span className={`status-dot ${hasFreshAis ? "fresh" : ""}`} aria-hidden="true" />
+            <strong>{!health ? "بررسی وضعیت AIS…" : hasFreshAis ? "گزارش تازه AIS" : "AIS بدون گزارش تازه"}</strong>
+          </div>
           <p className="hint">
-            {health?.ais_worker_running ? "دریافت‌کننده AIS همراه برنامه فعال است." : "دریافت‌کننده خودکار AIS فعال نیست."}
-          </p>
-          <p className="hint">
-            {hasFreshAis
+            {health && (hasFreshAis
               ? `${faNumber(health.fresh_ais_vessels)} شناور با گزارش کمتر از پنج دقیقه`
-              : "گزارش تازه AIS دریافت نشده است؛ پوشش کامل منطقه تأیید نشده است."}
+              : "موقعیت‌ها ممکن است قدیمی باشند؛ پوشش کامل نیست.")}
           </p>
-          <label className="legend">
+          <p className="hint receiver-status">
+            {!health ? "در حال اتصال به سامانه" : health.ais_worker_running ? "دریافت‌کننده فعال" : "دریافت‌کننده خاموش"}
+            {" · نمایش: "}{faNumber(visible.length)} شناور
+          </p>
+          <p className="hint radar-age">
+            تصاویر راداری زنده نیستند.
+            {coverage?.last_look && <> آخرین تصویر: {faAge(
+              ((asOf ? Date.parse(asOf) : clockMs) - Date.parse(coverage.last_look)) / 1000,
+            )}{asOf ? " (در خط زمان)" : ""}</>}
+          </p>
+        </section>
+
+        <section className="panel map-controls" aria-labelledby="layers-title">
+          <h2 id="layers-title">لایه‌های نقشه</h2>
+          <label className="layer-control">
+            <input type="checkbox" checked={showRadar} onChange={() => {
+              setShowRadar((v) => !v);
+              setSelectedDetectionKey(null);
+            }} />
+            <span className="ring" style={{ borderColor: RADAR_COLOUR }} aria-hidden="true" />
+            <span className="legend-label">آشکارسازی‌های مدل</span>
+            <span className="legend-count">{faNumber(radar?.count ?? 0)}</span>
+          </label>
+          <label className="layer-control">
+            <input type="checkbox" checked={showDark} onChange={() => {
+              setShowDark((v) => !v);
+              setSelectedEventId(null);
+            }} />
+            <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS.medium }} aria-hidden="true" />
+            <span className="legend-label">نامزدهای شناور تاریک</span>
+            <span className="legend-count">{faNumber(dark?.count ?? 0)}</span>
+          </label>
+          <label className="layer-control">
+            <input type="checkbox" checked={showCoverage}
+              onChange={() => setShowCoverage((v) => !v)} />
+            <span className="swatch" style={{ background: coverageColour(24) }} aria-hidden="true" />
+            <span className="legend-label">محدوده تصاویر راداری</span>
+            <span className="legend-count">{faNumber(coverage?.count ?? 0)}</span>
+          </label>
+          <label className="layer-control">
             <input type="checkbox" checked={showEstimates}
               onChange={() => setShowEstimates((v) => !v)} disabled={asOf != null} />
-            <span className="swatch" style={{background: "#e6b5ff"}} />
-            <span>نمایش موقعیت تخمینی</span>
+            <span className="swatch" style={{ background: "#e6b5ff" }} aria-hidden="true" />
+            <span className="legend-label">موقعیت تخمینی AIS</span>
           </label>
-          <p className="hint">
-            نقطه بنفش و خط‌چین: تخمین با فرض سرعت و مسیر ثابت، حداکثر پنج دقیقه
-            پس از گزارش ارائه‌دهنده؛ دقت آن تضمین نشده است. نماد اصلی، آخرین مشاهده است.
-            {asOf && " تخمین در مرور تاریخی خاموش است؛ لایه AIS مستقل از زمان رادار است."}
+          <p className="hint control-note">
+            {asOf ? "تخمین در مرور تاریخی خاموش است؛ AIS مستقل از زمان رادار است."
+              : showEstimates ? "بنفش: تخمین تا پنج دقیقه پس از گزارش، با فرض سرعت و مسیر ثابت؛ دقت تضمین‌شده نیست. نماد اصلی، آخرین مشاهده است."
+              : "تخمین: حداکثر پنج دقیقه پس از گزارش AIS."}
           </p>
+          <p className="hint control-note">برای دیدن تصویر، روی حلقه زرد بزنید. نامزد تاریک، اثبات خاموشی AIS نیست.</p>
         </section>
 
-        <section className="panel">
-          <h2>درستی موقعیت‌های گزارش‌شده</h2>
-          <p className="hint">
-            AIS را خود شناورها گزارش می‌کنند و در این منطقه اغلب جعل می‌شود.
-            موقعیت‌های مشکوک نگه داشته و علامت‌گذاری می‌شوند، هرگز حذف
-            نمی‌شوند &mdash; یک مسیر ساختگی خود یک شاهد است.
-          </p>
-          <label className="legend">
-            <span
-              className={`suspect-row ${suspectCount ? "active" : ""}`}
-            >
-              <input
-                type="checkbox"
-                checked={suspectOnly}
-                onChange={() => setSuspectOnly((v) => !v)}
-              />
-              <span className="legend-label">فقط موقعیت‌های مشکوک</span>
-              <span className="legend-count">{faNumber(suspectCount)}</span>
-            </span>
-          </label>
-        </section>
+        {(error || radarError || analysedError || darkError) && (
+          <div className="panel dashboard-errors" role="alert">
+            {error && <p className="error">دریافت شناورهای AIS ناموفق بود: {error}</p>}
+            {radarError && <p className="error">آشکارسازی‌ها بارگیری نشد: {radarError}</p>}
+            {analysedError && <p className="error">محدوده جست‌وجو بارگیری نشد؛ نبود حلقه، نشانه نبود شناور نیست. {analysedError}</p>}
+            {darkError && <p className="error">نامزدها بارگیری نشد: {darkError}</p>}
+          </div>
+        )}
 
-        <section className="panel">
-          <h2>پوشش راداری</h2>
-          <p className="hint">
-            Sentinel-1 زنده نیست. همه چیز را می‌بیند، حتی شناورهایی که هیچ
-            سیگنالی نمی‌فرستند &mdash; اما فقط هنگام گذر ماهواره. هر جا نقشه
-            سایه ندارد، اخیراً تصویری گرفته نشده است.
-          </p>
-          <label className="legend">
-            <span className="suspect-row">
-              <input
-                type="checkbox"
-                checked={showCoverage}
-                onChange={() => setShowCoverage((v) => !v)}
-              />
-              <span className="legend-label">نمایش محدوده تصاویر راداری</span>
-              <span className="legend-count">{faNumber(coverage?.count ?? 0)}</span>
-            </span>
-          </label>
-          <ul className="legend coverage-key">
-            {[
-              [12, "کمتر از ۱۲ ساعت"],
-              [48, "۱۲ ساعت تا ۲ روز"],
-              [120, "۲ تا ۵ روز"],
-              [999, "بیش از ۵ روز"],
-            ].map(([hours, label]) => (
-              <li key={String(label)}>
-                <span
-                  className="swatch"
-                  style={{ background: coverageColour(Number(hours) - 1) }}
-                />
-                <span className="legend-label">{label}</span>
-              </li>
-            ))}
-          </ul>
-          {coverage?.last_look && (
-            <p className="hint last-look">
-              آخرین تصویر راداری{" "}
-              {faAge(
-                ((asOf ? Date.parse(asOf) : Date.now()) - new Date(coverage.last_look).getTime()) /
-                  1000,
-              )}
-              {asOf ? " (در لحظه خط زمان)" : ""}
-              {coverage.satellites.length > 0 &&
-                ` · ${coverage.satellites.join(", ")}`}
-            </p>
-          )}
-        </section>
-
-        <section className="panel">
-          <h2>شناورها در تصاویر ماهواره‌ای</h2>
-          <p className="hint">
-            حلقه‌های زرد آشکارسازی‌های مدل یادگیری عمیق در تصاویر راداری
-            ماهواره Sentinel-1 هستند، چه شناور سیگنالی بفرستد چه نه: بیشترشان
-            شناورند و برخی هشدار نادرست. روی یکی کلیک کنید تا آن را در تصویرش
-            ببینید. هر کدام تصویری لحظه‌ای از یک گذر است، نه موقعیت زنده؛ در
-            گذرهایی که با AIS تلفیق شده‌اند نامزدهای شناور تاریک جداگانه
-            علامت خورده‌اند (پایین‌تر). خط مبنای CFAR و مدل نخستِ کنارگذاشته‌شده
-            اینجا نمایش داده نمی‌شوند.
-          </p>
-          <label className="legend">
-            <span className="suspect-row">
-              <input
-                type="checkbox"
-                checked={showRadar}
-                onChange={() => {
-                  setShowRadar((v) => !v);
-                  setSelectedDetectionKey(null);
-                }}
-              />
-              <span className="ring" style={{ borderColor: RADAR_COLOUR }} />
-              <span className="legend-label">
-                نمایش {faNumber(RADAR_LOOKBACK_DAYS)} روز اخیر
-              </span>
-              <span className="legend-count">{faNumber(radar?.count ?? 0)}</span>
-            </span>
-          </label>
-          {analysedError ? (
-            <p className="hint">
-              ناحیه‌هایی که آشکارسازها جست‌وجو کرده‌اند بارگیری نشد، پس نقشه
-              نمی‌تواند نشان دهد کجا نبودِ حلقه یعنی جست‌وجو نشده.
-            </p>
-          ) : (
-            <p className="hint">
-              حلقه‌ها فقط از ناحیه‌های قاب‌گرفته‌ای می‌آیند که آشکارساز در هر
-              گذر یک بار جست‌وجو کرده است. بیرون از آن‌ها نبودِ حلقه یعنی جست‌وجو
-              نشده. درون آن‌ها هم نبودِ حلقه اثبات نبودِ کشتی نیست: آشکارسازها
-              برخی شناورها را از دست می‌دهند.
-            </p>
-          )}
-          <ul className="legend searched-key">
-            <li>
-              <span className="box-swatch" />
-              <span className="legend-label">
-                جست‌وجو با مدل، جایی که آزموده شده (جز تا ۱ کیلومتری خشکی)
-              </span>
-              <span className="legend-count">{faNumber(searchedCounts.tested)}</span>
-            </li>
-            <li>
-              <span className="box-swatch dashed" />
-              <span className="legend-label">
-                جست‌وجو با مدل، دقت اینجا نامعلوم (بیرون از ۱۲ محدوده سنجیده)
-              </span>
-              <span className="legend-count">{faNumber(searchedCounts.untested)}</span>
-            </li>
-          </ul>
-          {radarError && <p className="error">{radarError}</p>}
-          {analysedError && <p className="error">{analysedError}</p>}
-        </section>
-
-        <section className="panel">
-          <h2>نامزدهای شناور تاریک</h2>
-          <p className="hint">
-            آشکارسازی‌های راداری که مسیر ساعتیِ هیچ شناور AIS به آن‌ها نمی‌رسد،
-            بر پایه حضور AIS از Global Fishing Watch. تلفیق چند روز پس از هر گذر
-            به‌صورت دسته‌ای انجام می‌شود. نامزد است، نه حکم: شکاف دریافت، اخلال و
-            نمونه‌برداری ساعتی می‌توانند کشتیِ دارای AIS را تاریک نشان دهند. فقط
-            گذرهای تلفیق‌شده نامزد دارند؛ جاهای دیگر نبودِ حلقه قرمز یعنی بررسی
-            نشده، نه پاک.
-          </p>
-          <label className="legend">
-            <span className="suspect-row">
-              <input
-                type="checkbox"
-                checked={showDark}
-                onChange={() => {
-                  setShowDark((v) => !v);
-                  setSelectedEventId(null);
-                }}
-              />
-              <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS.medium }} />
-              <span className="legend-label">نمایش نامزدها</span>
-              <span className="legend-count">{faNumber(dark?.count ?? 0)}</span>
-            </span>
-          </label>
-          <ul className="legend tier-key">
-            {TIERS.map((tier) => (
-              <li key={tier}>
-                <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS[tier] }} />
-                <span className="legend-label">{DARK_TIER_LABELS[tier]}</span>
-                <span className="legend-count">{faNumber(darkCounts.get(tier) ?? 0)}</span>
-              </li>
-            ))}
-          </ul>
-          {darkAtSpots > 0 && (
-            <p className="hint">
-              {faNumber(darkAtSpots)} مورد از آن‌ها در نقطه‌های پایدار است، جایی که در
-              بسیاری از گذرهای پیشین چیزی آشکار شده: احتمالاً سازه‌های ثابت یا کشتی‌هایی
-              که ماه‌ها لنگر انداخته‌اند (روی کارت‌هایشان علامت خورده‌اند).
-            </p>
-          )}
-          {showDark && feed.length > 0 && (
-            <ol className="dark-feed" aria-label="نامزدهای شناور تاریک، جدیدترین گذر نخست">
-              {feed.map((event) => (
-                <li key={event.id}>
-                  <button
-                    className={event.id === selectedEventId ? "selected" : ""}
-                    onClick={() => selectEvent(event.id)}
-                  >
-                    <span
-                      className="ring ring-dark"
-                      style={{ borderColor: DARK_COLOURS[tierOf(event)] }}
-                    />
-                    <span className="feed-text">
-                      <span>
-                        {faDateTime(event.ts)} ·{" "}
-                        {faAge(event.age_hours * 3600)}
-                      </span>
-                      <span className="feed-sub">
-                        {faNumber(event.lat ?? 0, 3)}°، {faNumber(event.lon ?? 0, 3)}° ·{" "}
-                        {event.evidence.gate.nearest_gap_m == null
-                          ? "هیچ شناور AIS نزدیک نیست"
-                          : `${faMetres(event.evidence.gate.nearest_gap_m)} بیرون از نزدیک‌ترین دروازه AIS`}
-                        {event.persistent ? " · نقطه پایدار" : ""}
-                      </span>
-                    </span>
-                  </button>
+        <details className="rail-disclosure">
+          <summary>فیلترهای AIS</summary>
+          <div className="disclosure-body">
+            <p className="hint">رده‌ها از گزارش AIS می‌آیند، نه از تصویر راداری.</p>
+            <ul className="legend">
+              {ALL_CLASSES.map((key) => (
+                <li key={key}>
+                  <label>
+                    <input type="checkbox" checked={!hidden.has(key)} onChange={() => toggle(key)} />
+                    <span className="swatch" style={{ background: CLASS_COLOURS[key] }} />
+                    <span className="legend-label">{CLASS_LABELS[key]}</span>
+                    <span className="legend-count">{faNumber(counts.get(key) ?? 0)}</span>
+                  </label>
                 </li>
               ))}
-            </ol>
-          )}
-          {(dark?.count ?? 0) > FEED_LENGTH && (
-            <p className="hint">
-              {faNumber(FEED_LENGTH)} مورد جدیدتر از {faNumber(dark?.count ?? 0)} نمایش داده
-              شده؛ همه روی نقشه هستند.
-            </p>
-          )}
-          {darkError && <p className="error">{darkError}</p>}
-        </section>
-
-        <section className="panel">
-          <h2>رده‌های شناور</h2>
-          <p className="hint">
-            رده از AIS می‌آید، نه از تصویر. رادار با تفکیک ۱۰ متر نفتکش را از
-            فله‌بر تشخیص نمی‌دهد.
-          </p>
-          <ul className="legend">
-            {ALL_CLASSES.map((key) => (
-              <li key={key}>
-                <label>
-                  <input
-                    type="checkbox"
-                    checked={!hidden.has(key)}
-                    onChange={() => toggle(key)}
-                  />
-                  <span
-                    className="swatch"
-                    style={{ background: CLASS_COLOURS[key] }}
-                  />
-                  <span className="legend-label">{CLASS_LABELS[key]}</span>
-                  <span className="legend-count">{faNumber(counts.get(key) ?? 0)}</span>
-                </label>
-              </li>
-            ))}
-          </ul>
-        </section>
-
-        <section className="panel">
-          <h2>عمر موقعیت‌ها</h2>
-          <p className="hint">
-            موقعیت‌های قدیمی‌تر روی نقشه کم‌رنگ می‌شوند. هیچ چیز اینجا تصویر
-            راداری زنده نیست.
-          </p>
-          <label className="slider">
-            <input
-              type="range"
-              min={15}
-              max={1440}
-              step={15}
-              value={maxAgeMinutes}
-              onChange={(e) => setMaxAgeMinutes(Number(e.target.value))}
-            />
-            <span>
-              نمایش{" "}
-              {maxAgeMinutes >= 60
+            </ul>
+            <label className={`suspect-row ${suspectCount ? "active" : ""}`}>
+              <input type="checkbox" checked={suspectOnly} onChange={() => setSuspectOnly((v) => !v)} />
+              <span className="legend-label">فقط موقعیت‌های مشکوک</span>
+              <span className="legend-count">{faNumber(suspectCount)}</span>
+            </label>
+            <p className="hint">AIS خودگزارشی است. موقعیت‌های مشکوک علامت می‌خورند و حذف نمی‌شوند.</p>
+            <label className="slider">
+              <span>عمر موقعیت‌های AIS: {maxAgeMinutes >= 60
                 ? `${faNumber(Math.floor(maxAgeMinutes / 60))} ساعت`
-                : `${faNumber(maxAgeMinutes)} دقیقه`}{" "}
-              اخیر
-            </span>
-          </label>
-        </section>
+                : `${faNumber(maxAgeMinutes)} دقیقه`} اخیر</span>
+              <input type="range" aria-label="عمر موقعیت‌های AIS به دقیقه" min={15} max={1440} step={15}
+                value={maxAgeMinutes} onChange={(e) => setMaxAgeMinutes(Number(e.target.value))} />
+            </label>
+          </div>
+        </details>
 
-        <section className="panel">
-          <h2>وضعیت</h2>
-          <dl className="stats">
-            <div>
-              <dt>در حال نمایش</dt>
-              <dd>{faNumber(visible.length)}</dd>
-            </div>
-            <div>
-              <dt>شناورهای شناخته‌شده</dt>
-              <dd>{health ? faNumber(health.vessels) : "—"}</dd>
-            </div>
-            <div>
-              <dt>موقعیت‌ها</dt>
-              <dd>{health ? faNumber(health.positions) : "—"}</dd>
-            </div>
-            <div>
-              <dt>تصاویر راداری</dt>
-              <dd>{health ? faNumber(health.sar_scenes) : "—"}</dd>
-            </div>
-            <div>
-              <dt>آشکارسازی‌های ذخیره‌شده (همه آشکارسازها)</dt>
-              <dd>{health ? faNumber(health.detections) : "—"}</dd>
-            </div>
-            <div>
-              <dt>خوراک‌های زنده</dt>
-              <dd>{hasFreshAis ? "گزارش تازه دریافت شده" : "فاقد گزارش تازه"}</dd>
-            </div>
-          </dl>
-          {error && <p className="error">{error}</p>}
-        </section>
+        <details className="rail-disclosure">
+          <summary>فهرست نامزدهای تاریک <span className="legend-count">{faNumber(dark?.count ?? 0)}</span></summary>
+          <div className="disclosure-body">
+            <p className="hint">جدیدترین گذر نخست است. برای دیدن تصویر و شواهد، یک مورد را انتخاب کنید.</p>
+            {!showDark && <p className="hint">برای دیدن فهرست، لایه نامزدهای شناور تاریک را روشن کنید.</p>}
+            {showDark && dark && feed.length === 0 && <p className="hint">نامزدی برای این زمان ذخیره نشده است.</p>}
+            {showDark && feed.length > 0 && (
+              <ol className="dark-feed" aria-label="نامزدهای شناور تاریک، جدیدترین گذر نخست">
+                {feed.map((event) => (
+                  <li key={event.id}>
+                    <button className={event.id === selectedEventId ? "selected" : ""}
+                      onClick={() => selectEvent(event.id)}>
+                      <span className="ring ring-dark" style={{ borderColor: DARK_COLOURS[tierOf(event)] }} />
+                      <span className="feed-text">
+                        <span>{faDateTime(event.ts)} · {faAge(event.age_hours * 3600)}</span>
+                        <span className="feed-sub">
+                          {faNumber(event.lat ?? 0, 3)}°، {faNumber(event.lon ?? 0, 3)}° ·{" "}
+                          {event.evidence.gate.nearest_gap_m == null ? "هیچ شناور AIS نزدیک نیست"
+                            : `${faMetres(event.evidence.gate.nearest_gap_m)} بیرون از نزدیک‌ترین دروازه AIS`}
+                          {event.persistent ? " · نقطه پایدار" : ""}
+                        </span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ol>
+            )}
+            {showDark && (dark?.count ?? 0) > FEED_LENGTH && (
+              <p className="hint">{faNumber(FEED_LENGTH)} مورد جدیدتر از {faNumber(dark?.count ?? 0)}؛ همه روی نقشه هستند.</p>
+            )}
+          </div>
+        </details>
+
+        <details className="rail-disclosure">
+          <summary>راهنما و جزئیات داده‌ها</summary>
+          <div className="disclosure-body">
+            <h3>تصاویر و آشکارسازی‌ها</h3>
+            <p className="hint">حلقه زرد، آشکارسازی مدل یادگیری عمیق در لحظه گذر Sentinel-1 است؛ ممکن است هشدار نادرست باشد. آشکارسازی‌های {faNumber(RADAR_LOOKBACK_DAYS)} روز اخیر و گذرهای تلفیق‌شده نمایش داده می‌شوند. CFAR و مدل نخست در این نقشه نیستند.</p>
+            <p className="hint">فقط محدوده‌های قاب‌گرفته جست‌وجو شده‌اند. نبود حلقه، حتی در محدوده جست‌وجو، اثبات نبود شناور نیست.</p>
+            <ul className="legend searched-key">
+              <li><span className="box-swatch" /><span className="legend-label">جست‌وجوی مدل در محدوده سنجیده، دور از ساحل</span><span className="legend-count">{faNumber(searchedCounts.tested)}</span></li>
+              <li><span className="box-swatch dashed" /><span className="legend-label">جست‌وجوی مدل با دقت نامعلوم</span><span className="legend-count">{faNumber(searchedCounts.untested)}</span></li>
+            </ul>
+            <p className="hint">ارزیابی در ۱۲ محدوده انجام شده؛ تا یک کیلومتری خشکی دقت نامعلوم است. قاب خط‌چین می‌تواند ناشی از پیکربندی آزموده‌نشده یا خارج بودن از محدوده سنجیده باشد.</p>
+            <ul className="legend coverage-key">
+              {[[12, "کمتر از ۱۲ ساعت"], [48, "۱۲ ساعت تا ۲ روز"], [120, "۲ تا ۵ روز"], [999, "بیش از ۵ روز"]].map(([hours, label]) => (
+                <li key={String(label)}><span className="swatch" style={{ background: coverageColour(Number(hours) - 1) }} /><span className="legend-label">{label}</span></li>
+              ))}
+            </ul>
+            {coverage && coverage.satellites.length > 0 && <p className="hint">ماهواره‌ها: {coverage.satellites.join(", ")}</p>}
+            <h3>نامزدهای تاریک</h3>
+            <p className="hint">مسیر ساعتی AIS از Global Fishing Watch به این آشکارسازی‌ها نمی‌رسد. تلفیق چند روز پس از گذر انجام می‌شود؛ شکاف دریافت و نمونه‌برداری ساعتی ممکن است نامزد نادرست بسازد. تنها گذرهای تلفیق‌شده بررسی شده‌اند.</p>
+            <ul className="legend tier-key">
+              {TIERS.map((tier) => <li key={tier}><span className="ring ring-dark" style={{ borderColor: DARK_COLOURS[tier] }} /><span className="legend-label">{DARK_TIER_LABELS[tier]}</span><span className="legend-count">{faNumber(darkCounts.get(tier) ?? 0)}</span></li>)}
+            </ul>
+            {darkAtSpots > 0 && <p className="hint">{faNumber(darkAtSpots)} نامزد در نقطه پایدار است؛ احتمال سازه ثابت یا شناور با توقف طولانی وجود دارد و کارت آن علامت دارد.</p>}
+            <h3>تخمین موقعیت AIS</h3>
+            <p className="hint">نقطه بنفش و خط‌چین، تخمین با سرعت و مسیر حرکت ثابت تا پنج دقیقه پس از زمان گزارش ارائه‌دهنده است؛ دقت تضمین‌شده نیست. نماد اصلی همیشه آخرین مشاهده است. این تخمین، موقعیت فعلی شناورِ صرفاً راداری را تعیین نمی‌کند.</p>
+            <h3>آمار ذخیره‌شده</h3>
+            <dl className="stats">
+              <div><dt>شناورهای AIS</dt><dd>{health ? faNumber(health.vessels) : "—"}</dd></div>
+              <div><dt>موقعیت‌ها</dt><dd>{health ? faNumber(health.positions) : "—"}</dd></div>
+              <div><dt>تصاویر راداری</dt><dd>{health ? faNumber(health.sar_scenes) : "—"}</dd></div>
+              <div><dt>آشکارسازی‌ها، همه مدل‌ها و CFAR</dt><dd>{health ? faNumber(health.detections) : "—"}</dd></div>
+            </dl>
+          </div>
+        </details>
 
         <footer className="attribution" dir="ltr">
           Source: {attribution.length ? attribution.join(", ") : "—"}

@@ -1,4 +1,4 @@
-/* Dark operational console. Dense, low-chrome, built for long viewing. */
+/* Dark map console with compact controls and details on demand. */
 
 :root {
   --bg: #080b11;
@@ -41,8 +41,10 @@ body {
   display: flex;
   flex-direction: column;
 }
+.rail > * { flex-shrink: 0; }
+.rail .panel { padding-block: 10px; }
 
-.brand { padding: 16px; border-bottom: 1px solid var(--line); }
+.brand { padding: 14px 16px; border-bottom: 1px solid var(--line); }
 .brand h1 { margin: 0; font-size: 15px; letter-spacing: 0.02em; font-weight: 600; }
 .brand p { margin: 3px 0 0; color: var(--muted); font-size: 11px; }
 
@@ -57,6 +59,60 @@ body {
 }
 
 .hint { margin: 0 0 10px; color: var(--muted); font-size: 11px; line-height: 1.45; }
+
+/* Keep the main rail short; secondary controls use native disclosures. */
+.rail .panel h2 { font-size: 12px; letter-spacing: 0; color: var(--text); }
+.rail .hint { font-size: 12px; line-height: 1.65; }
+.rail .hint:last-child { margin-bottom: 0; }
+.status-line { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.status-line strong { font-size: 13px; font-weight: 600; }
+.status-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); flex: none; }
+.status-dot.fresh { background: #34d399; }
+.rail .receiver-status { font-size: 11px; }
+.radar-age { padding-top: 8px; border-top: 1px solid var(--line); }
+.layer-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 38px;
+  padding: 5px 0;
+  cursor: pointer;
+}
+.layer-control input { margin: 0; flex: none; accent-color: var(--accent); }
+.layer-control:has(input:disabled) { color: var(--muted); cursor: default; }
+.rail .control-note { font-size: 11px; margin: 8px 0 0; }
+.rail-disclosure { border-bottom: 1px solid var(--line); }
+.rail-disclosure > summary {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 44px;
+  padding: 10px 16px;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  list-style: none;
+}
+.rail-disclosure > summary::-webkit-details-marker { display: none; }
+.rail-disclosure > summary::after {
+  content: "";
+  width: 6px;
+  height: 6px;
+  border-inline-end: 1.5px solid var(--muted);
+  border-bottom: 1.5px solid var(--muted);
+  transform: rotate(45deg);
+  margin-inline-start: auto;
+  flex: none;
+}
+.rail-disclosure[open] > summary::after { transform: rotate(225deg); }
+.rail-disclosure > summary:hover { background: var(--panel-2); }
+.rail :is(summary, input, button, a):focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+.disclosure-body { padding: 0 16px 16px; }
+.disclosure-body h3 { margin: 18px 0 8px; font-size: 12px; font-weight: 600; }
+.disclosure-body h3:first-child { margin-top: 0; }
+.disclosure-body .legend { margin-bottom: 12px; }
+.disclosure-body .stats dt { letter-spacing: 0; font-size: 11px; }
+.dashboard-errors .error:first-child { margin-top: 0; }
 
 .legend { list-style: none; margin: 0; padding: 0; }
 .legend li + li { margin-top: 2px; }
@@ -341,8 +397,6 @@ body {
   color: var(--muted);
   font-size: 11px;
 }
-.last-look { margin: 10px 0 0; color: var(--text); font-size: 11px; }
-
 /* --------------------------------------------------------------- radar -- */
 
 /* Legend key for radar detections: hollow, like the map symbol. */
