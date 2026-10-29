@@ -39,6 +39,8 @@ class Settings:
     hormuz_bbox: BBox
     database_url: str | None
     data_dir: Path
+    openwaters_enabled: bool = False
+    openwaters_url: str = "https://ais.openwaters.io/v1/stream"
 
     @property
     def has_live_ais(self) -> bool:
@@ -50,6 +52,8 @@ class Settings:
             available.append("aisstream")
         if self.aiscast_token:
             available.append("aiscast")
+        if self.openwaters_enabled:
+            available.append("openwaters")
         return available
 
 
@@ -74,4 +78,6 @@ def load_settings(env_file: Path | None = None) -> Settings:
         hormuz_bbox=bbox("AOI_HORMUZ_BBOX", HORMUZ_BBOX),
         database_url=os.environ.get("DATABASE_URL") or None,
         data_dir=Path(os.environ.get("DATA_DIR", "data")),
+        openwaters_enabled=os.environ.get("OPENWATERS_ENABLED", "").lower() in {"1", "true", "yes"},
+        openwaters_url=os.environ.get("OPENWATERS_URL") or "https://ais.openwaters.io/v1/stream",
     )

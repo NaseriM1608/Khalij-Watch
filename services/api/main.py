@@ -18,6 +18,7 @@ import asyncio
 import datetime as dt
 import logging
 from contextlib import asynccontextmanager
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any, Literal
 
@@ -27,6 +28,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 
 from core.ais.landmask import point_in_polygon
+from core.ais.motion import MotionEstimate, estimate_motion
 from core.areas import (
     MEASURED_AREAS,
     PRODUCT_DETECTOR,
@@ -135,7 +137,19 @@ def _parse_bbox(spec: str | None) -> BBox:
         raise HTTPException(status_code=400, detail=f"invalid bbox: {exc}") from exc
 
 
-def _fix_to_json(fix: VesselFix, now: dt.datetime) -> dict[str, Any]:
+def _fix_to_json(fix: VesselFix, now: dt.datetime, *, estimates: bool = True) -> dict[str, Any]:
+    estimate = (
+        estimate_motion(fix, now)
+        if estimates
+        else MotionEstimate(
+            "unavailable",
+            "disabled",
+            now,
+            (now - fix.ts).total_seconds(),
+        )
+    )
+    estimate_payload = asdict(estimate)
+    estimate_payload["target_time"] = estimate.target_time.isoformat()
     return {
         "mmsi": fix.mmsi,
         "lon": round(fix.lon, 6),
@@ -153,17 +167,38 @@ def _fix_to_json(fix: VesselFix, now: dt.datetime) -> dict[str, Any]:
         # AIS in this AOI is adversarial; the UI must be able to show doubt.
         "is_suspect": fix.is_suspect,
         "anomaly_flags": fix.anomaly_flags,
+        "timestamp_basis": fix.timestamp_basis,
+        "received_at": fix.received_at.isoformat() if fix.received_at else None,
+        "provider_source": fix.provider_source,
+        "provider_reencoded": fix.provider_reencoded,
+        "estimate": estimate_payload,
     }
 
 
 @app.get("/api/health")
 async def health() -> dict[str, Any]:
     settings = _state.get("settings")
+    now = dt.datetime.now(dt.UTC)
     with session_scope(_sessions()) as session:
         vessels = VesselRepository(session).count()
         positions = PositionRepository(session).count()
         scenes_known = SceneRepository(session).count()
         detections_stored = DetectionRepository(session).count()
+        fixes = PositionRepository(session).latest_in_bbox(
+            _parse_bbox(None),
+            now=now,
+            max_age=dt.timedelta(days=30),
+            limit=50_000,
+        )
+    observed = [f for f in fixes if f.source != "synthetic"]
+    fresh = [
+        f
+        for f in observed
+        if f.timestamp_basis == "provider"
+        and 0 <= (now - f.ts).total_seconds() <= 300
+        and f.received_at is not None
+        and 0 <= (now - f.received_at).total_seconds() <= 300
+    ]
     return {
         "status": "ok",
         "vessels": vessels,
@@ -172,7 +207,11 @@ async def health() -> dict[str, Any]:
         "detections": detections_stored,
         "live_feeds": settings.describe_feeds() if settings else [],
         # Surfaced so the UI can warn when it is showing seeded, not live, data.
-        "has_live_ais": bool(settings and settings.has_live_ais),
+        "has_live_ais": bool(fresh),
+        "fresh_ais_vessels": len(fresh),
+        "ais_status": "fresh" if fresh else "stale" if observed else "no_observations",
+        "latest_ais_at": max((f.ts for f in observed), default=None),
+        "latest_received_at": max((f.received_at for f in observed if f.received_at), default=None),
     }
 
 
@@ -199,6 +238,9 @@ async def vessels(
     bbox: str | None = Query(default=None, description="min_lon,min_lat,max_lon,max_lat"),
     max_age_minutes: int = Query(default=360, ge=1, le=60 * 24 * 30),
     limit: int = Query(default=10_000, ge=1, le=50_000),
+    estimates: bool = Query(
+        default=True, description="Experimental short-gap estimates; disable for history"
+    ),
 ) -> dict[str, Any]:
     """Latest known position per vessel inside a bounding box."""
     box = _parse_bbox(bbox)
@@ -214,9 +256,11 @@ async def vessels(
         "generated_at": now.isoformat(),
         "bbox": _bbox_json(box),
         "count": len(fixes),
-        "vessels": [_fix_to_json(f, now) for f in fixes],
+        "vessels": [_fix_to_json(f, now, estimates=estimates) for f in fixes],
         "suspect_count": sum(1 for f in fixes if f.is_suspect),
-        "attribution": sorted({f.source for f in fixes}),
+        "attribution": sorted(
+            {f.source for f in fixes} | {f.provider_source for f in fixes if f.provider_source}
+        ),
     }
 
 

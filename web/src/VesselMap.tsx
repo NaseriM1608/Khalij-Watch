@@ -26,6 +26,7 @@
 import { useEffect, useRef, useState } from "react";
 import maplibregl, { Map as MapLibreMap } from "maplibre-gl";
 import { faAge, faDateTime, faNumber } from "./fa";
+import { motionFeatures } from "./motion";
 import "maplibre-gl/dist/maplibre-gl.css";
 import {
   ANALYSED_COLOUR,
@@ -48,6 +49,7 @@ const BASEMAP =
   "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json";
 
 const VESSEL_SOURCE = "vessels";
+const MOTION_SOURCE = "motion-estimates";
 const TRACK_SOURCE = "track";
 const SCENE_SOURCE = "scenes";
 const DETECTION_SOURCE = "detections";
@@ -55,12 +57,13 @@ const DARK_SOURCE = "dark-events";
 const EVENT_AIS_SOURCE = "event-ais";
 const ANALYSED_SOURCE = "analysed";
 const ANALYSED_FILL = "analysed-fill";
-const VESSEL_LAYERS = ["vessel-arrows", "vessel-dots"];
+const VESSEL_LAYERS = ["vessel-arrows", "vessel-dots", "estimated-position"];
 const DETECTION_LAYER = "detection-rings";
 const DARK_LAYER = "dark-rings";
 
 interface Props {
   vessels: Vessel[];
+  estimatesEnabled: boolean;
   scenes: SarScene[];
   detections: SarDetection[];
   track: { lon: number; lat: number }[] | null;
@@ -199,6 +202,7 @@ function bboxToPolygon(bbox: BBox): GeoJSON.Feature {
 
 export function VesselMap({
   vessels,
+  estimatesEnabled,
   scenes,
   detections,
   track,
@@ -238,6 +242,7 @@ export function VesselMap({
     instance.on("load", () => {
       for (const id of [
         VESSEL_SOURCE,
+        MOTION_SOURCE,
         TRACK_SOURCE,
         SCENE_SOURCE,
         DETECTION_SOURCE,
@@ -363,6 +368,18 @@ export function VesselMap({
           "circle-stroke-width": 2,
           "circle-stroke-color": "#ffffff",
         },
+      });
+
+      instance.addLayer({
+        id: "estimated-path", type: "line", source: MOTION_SOURCE,
+        filter: ["==", ["geometry-type"], "LineString"],
+        paint: { "line-color": "#e6b5ff", "line-width": 2, "line-dasharray": [3, 2] },
+      });
+      instance.addLayer({
+        id: "estimated-position", type: "circle", source: MOTION_SOURCE,
+        filter: ["==", ["geometry-type"], "Point"],
+        paint: { "circle-radius": 5, "circle-color": "#e6b5ff", "circle-opacity": 0.5,
+          "circle-stroke-color": "#e6b5ff", "circle-stroke-width": 2 },
       });
 
       // Contacts whose own report contradicts itself. Drawn first so the
@@ -541,6 +558,16 @@ export function VesselMap({
     const source = instance.getSource(VESSEL_SOURCE) as maplibregl.GeoJSONSource;
     source?.setData(toFeatureCollection(vessels));
   }, [vessels, loaded]);
+
+  useEffect(() => {
+    const instance = map.current;
+    if (!instance || !loaded) return;
+    const source = instance.getSource(MOTION_SOURCE) as maplibregl.GeoJSONSource;
+    const update = () => source?.setData(motionFeatures(vessels, estimatesEnabled));
+    update();
+    const timer = setInterval(update, 1000);
+    return () => clearInterval(timer);
+  }, [vessels, estimatesEnabled, loaded]);
 
   useEffect(() => {
     const instance = map.current;

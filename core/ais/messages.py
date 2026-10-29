@@ -156,6 +156,10 @@ class AisPositionReport:
     heading_deg: float | None = None
     nav_status: int | None = None
     msg_type: int | None = None
+    timestamp_basis: str | None = None
+    received_at: dt.datetime | None = None
+    provider_source: str | None = None
+    provider_reencoded: bool | None = None
 
     def __post_init__(self) -> None:
         if not is_valid_mmsi(self.mmsi):

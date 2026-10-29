@@ -26,6 +26,20 @@ export interface Vessel {
   /** AIS here is adversarial; the UI must be able to show doubt. */
   is_suspect: boolean;
   anomaly_flags: AnomalyFlag[] | null;
+  timestamp_basis?: string | null;
+  received_at?: string | null;
+  provider_source?: string | null;
+  provider_reencoded?: boolean | null;
+  estimate?: {
+    status: string;
+    reason: string | null;
+    lon: number | null;
+    lat: number | null;
+    target_time: string;
+    elapsed_seconds: number;
+    method: string;
+    max_age_seconds: number;
+  } | null;
 }
 
 export interface AnomalyFlag {
@@ -179,6 +193,9 @@ export interface Health {
   detections: number;
   live_feeds: string[];
   has_live_ais: boolean;
+  fresh_ais_vessels: number;
+  ais_status: "fresh" | "stale" | "no_observations";
+  latest_ais_at: string | null;
 }
 
 export interface TrackPoint {
@@ -349,9 +366,10 @@ async function getJson<T>(url: string): Promise<T> {
 export const api = {
   health: () => getJson<Health>("/api/health"),
   aoi: () => getJson<{ gulf: BBox; hormuz: BBox }>("/api/aoi"),
-  vessels: (bbox?: BBox, maxAgeMinutes = 360) => {
+  vessels: (bbox?: BBox, maxAgeMinutes = 360, estimates = true) => {
     const params = new URLSearchParams({
       max_age_minutes: String(maxAgeMinutes),
+      estimates: String(estimates),
     });
     if (bbox) {
       params.set(

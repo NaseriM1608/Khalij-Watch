@@ -81,6 +81,7 @@ export default function App() {
   const [suspectOnly, setSuspectOnly] = useState(false);
   const [coverage, setCoverage] = useState<ScenesResponse | null>(null);
   const [showCoverage, setShowCoverage] = useState(true);
+  const [showEstimates, setShowEstimates] = useState(false);
   const [radar, setRadar] = useState<DetectionsResponse | null>(null);
   const [radarError, setRadarError] = useState<string | null>(null);
   const [analysed, setAnalysed] = useState<AnalysedResponse | null>(null);
@@ -100,6 +101,13 @@ export default function App() {
   // The moment the radar layers look from (the timeline scrubber); null is now.
   const [asOf, setAsOf] = useState<string | null>(null);
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
+  const [clockMs, setClockMs] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setClockMs(Date.now()), REFRESH_MS);
+    return () => clearInterval(timer);
+  }, []);
+  const latestAisAge = health?.latest_ais_at ? (clockMs - Date.parse(health.latest_ais_at)) / 1000 : Infinity;
+  const hasFreshAis = health?.has_live_ais && latestAisAge >= 0 && latestAisAge <= 300;
 
   useEffect(() => {
     api.health().then(setHealth).catch(() => undefined);
@@ -210,12 +218,13 @@ export default function App() {
     let cancelled = false;
     const load = async () => {
       try {
-        const response = await api.vessels(undefined, maxAgeMinutes);
+        const response = await api.vessels(undefined, maxAgeMinutes, asOf == null);
         if (cancelled) return;
         setVessels(response.vessels);
         setAttribution(response.attribution);
         setSuspectCount(response.suspect_count);
         setError(null);
+        api.health().then((r) => !cancelled && setHealth(r)).catch(() => undefined);
       } catch (err) {
         if (!cancelled) setError((err as Error).message);
       }
@@ -226,7 +235,7 @@ export default function App() {
       cancelled = true;
       clearInterval(timer);
     };
-  }, [maxAgeMinutes]);
+  }, [maxAgeMinutes, asOf]);
 
   useEffect(() => {
     if (selected == null) {
@@ -338,11 +347,31 @@ export default function App() {
           <div className="banner banner-warn">
             <strong>داده‌های ساختگی</strong>
             <span>
-              هیچ خوراک زنده AIS پیکربندی نشده است. همه چیز روی این نقشه
-              شبیه‌سازی‌شده است و مشاهده واقعی <em>نیست</em>.
+              موقعیت‌های این لایه AIS شبیه‌سازی‌شده‌اند و مشاهده واقعی نیستند.
+              این پیام درباره تصاویر راداری ذخیره‌شده نیست.
             </span>
           </div>
         )}
+
+        <section className="panel">
+          <h2>گزارش AIS و تخمین کوتاه‌مدت</h2>
+          <p className="hint">
+            {hasFreshAis
+              ? `${faNumber(health.fresh_ais_vessels)} شناور با گزارش کمتر از پنج دقیقه`
+              : "گزارش تازه AIS دریافت نشده است؛ پوشش کامل منطقه تأیید نشده است."}
+          </p>
+          <label className="legend">
+            <input type="checkbox" checked={showEstimates}
+              onChange={() => setShowEstimates((v) => !v)} disabled={asOf != null} />
+            <span className="swatch" style={{background: "#e6b5ff"}} />
+            <span>نمایش موقعیت تخمینی</span>
+          </label>
+          <p className="hint">
+            نقطه بنفش و خط‌چین: تخمین با فرض سرعت و مسیر ثابت، حداکثر پنج دقیقه
+            پس از گزارش ارائه‌دهنده؛ دقت آن تضمین نشده است. نماد اصلی، آخرین مشاهده است.
+            {asOf && " تخمین در مرور تاریخی خاموش است؛ لایه AIS مستقل از زمان رادار است."}
+          </p>
+        </section>
 
         <section className="panel">
           <h2>درستی موقعیت‌های گزارش‌شده</h2>
@@ -632,7 +661,7 @@ export default function App() {
             </div>
             <div>
               <dt>خوراک‌های زنده</dt>
-              <dd>{health?.live_feeds.length ? health.live_feeds.join("، ") : "هیچ"}</dd>
+              <dd>{hasFreshAis ? "گزارش تازه دریافت شده" : "فاقد گزارش تازه"}</dd>
             </div>
           </dl>
           {error && <p className="error">{error}</p>}
@@ -640,6 +669,12 @@ export default function App() {
 
         <footer className="attribution" dir="ltr">
           Source: {attribution.length ? attribution.join(", ") : "—"}
+          {attribution.includes("openwaters") && <>
+            <br /><a href="https://openwaters.io/ais/" target="_blank" rel="noreferrer">Open Waters AIS</a>
+            {attribution.includes("aishub") && <>
+              {" · Data: "}<a href="https://www.aishub.net" target="_blank" rel="noreferrer">AISHub contributors</a>
+            </>}
+          </>}
           <br />
           Contains modified Copernicus Sentinel data.
           {showDark && (dark?.count ?? 0) > 0 && (
@@ -655,6 +690,7 @@ export default function App() {
         <div className="map-holder">
         <VesselMap
           vessels={visible}
+          estimatesEnabled={showEstimates && asOf == null}
           scenes={showCoverage ? (coverage?.scenes ?? []) : []}
           detections={
             showRadar ? (radar?.detections ?? NO_DETECTIONS) : NO_DETECTIONS
@@ -694,7 +730,8 @@ export default function App() {
             onClose={() => setSelectedDetectionKey(null)}
           />
         ) : selectedVessel ? (
-          <VesselDetail vessel={selectedVessel} track={track} onClose={() => setSelected(null)} />
+          <VesselDetail vessel={selectedVessel} track={track}
+            estimatesEnabled={showEstimates && asOf == null} onClose={() => setSelected(null)} />
         ) : (
           <div className="empty">
             <h2>موردی انتخاب نشده</h2>
@@ -712,13 +749,22 @@ export default function App() {
 function VesselDetail({
   vessel,
   track,
+  estimatesEnabled,
   onClose,
 }: {
   vessel: Vessel;
   track: Track | null;
+  estimatesEnabled: boolean;
   onClose: () => void;
 }) {
   const key = classOf(vessel);
+  const [nowMs, setNowMs] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => setNowMs(Date.now()), 1000);
+    return () => clearInterval(timer);
+  }, []);
+  const ageSeconds = Math.max(0, (nowMs - Date.parse(vessel.ts)) / 1000);
+  const canEstimate = estimatesEnabled && ageSeconds <= 300 && vessel.estimate?.status === "estimated";
   return (
     <div className="detail">
       <button className="close" onClick={onClose} aria-label="بستن">
@@ -730,7 +776,16 @@ function VesselDetail({
         {CLASS_LABELS[key]}
       </p>
 
-      <div className="age-badge">آخرین گزارش {faAge(vessel.age_seconds)}</div>
+      <div className="age-badge">آخرین گزارش {faAge(ageSeconds)}</div>
+
+      {canEstimate && vessel.estimate && (
+        <div className="banner" style={{borderColor: "#e6b5ff"}}>
+          <strong>موقعیت تخمینی با فرض حرکت ثابت</strong>
+          <span>{faCoord(vessel.estimate.lat!, vessel.estimate.lon!)} · {faDateTime(vessel.estimate.target_time)}</span>
+          <span>بر پایه زمان ارائه‌دهنده، نه زمان مستقل تأییدشده GPS؛ حداکثر فاصله پنج دقیقه</span>
+        </div>
+      )}
+      {ageSeconds > 300 && <p className="hint">گزارش قدیمی است؛ تخمین فعلی تولید نمی‌شود.</p>}
 
       <dl className="stats stacked">
         <div>

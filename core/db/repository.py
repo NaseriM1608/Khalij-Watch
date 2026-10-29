@@ -117,6 +117,10 @@ class VesselFix:
     source: str
     plausibility_score: float | None
     anomaly_flags: list | None = None
+    timestamp_basis: str | None = None
+    received_at: dt.datetime | None = None
+    provider_source: str | None = None
+    provider_reencoded: bool | None = None
 
     @property
     def is_suspect(self) -> bool:
@@ -247,6 +251,7 @@ class PositionRepository:
             )
             SELECT c.mmsi, c.lon, c.lat, c.ts, c.sog_kn, c.cog_deg, c.heading_deg,
                    c.source, c.plausibility_score, c.anomaly_flags,
+                   c.timestamp_basis, c.received_at, c.provider_source, c.provider_reencoded,
                    v.name, v.coarse_class
             FROM candidates c
             LEFT JOIN vessels v ON v.mmsi = c.mmsi
@@ -298,6 +303,10 @@ def _position_row(entry: AisPositionReport | ScoredPosition) -> dict:
         "nav_status": report.nav_status,
         "msg_type": report.msg_type,
         "source": report.source,
+        "timestamp_basis": report.timestamp_basis,
+        "received_at": _as_utc(report.received_at) if report.received_at else None,
+        "provider_source": report.provider_source,
+        "provider_reencoded": report.provider_reencoded,
         "plausibility_score": score,
         "anomaly_flags": flags,
     }
@@ -317,6 +326,12 @@ def _to_fix(row) -> VesselFix:
         source=row["source"],
         plausibility_score=row["plausibility_score"],
         anomaly_flags=_decode_flags(row["anomaly_flags"]),
+        timestamp_basis=row["timestamp_basis"],
+        received_at=_row_timestamp(row["received_at"]) if row["received_at"] else None,
+        provider_source=row["provider_source"],
+        provider_reencoded=bool(row["provider_reencoded"])
+        if row["provider_reencoded"] is not None
+        else None,
     )
 
 

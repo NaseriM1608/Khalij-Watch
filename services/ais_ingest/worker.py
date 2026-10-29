@@ -13,6 +13,7 @@ import contextlib
 import logging
 import signal
 import sys
+from urllib.parse import urlencode
 
 from core.ais.aisstream import build_subscription
 from core.config import Settings, load_settings
@@ -25,6 +26,7 @@ from services.ais_ingest.client import (
     WebSocketLike,
 )
 from services.ais_ingest.consumer import IngestConsumer
+from services.ais_ingest.openwaters import OpenWatersClient
 
 logger = logging.getLogger("ais_ingest")
 
@@ -77,10 +79,11 @@ async def report_stats(stats: IngestStats, stop: asyncio.Event) -> None:
 
 async def run(settings: Settings) -> int:
     feeds = build_feeds(settings)
-    if not feeds:
+    openwaters = getattr(settings, "openwaters_enabled", False)
+    if not feeds and not openwaters:
         logger.error(
             "No AIS credentials configured. Set AISSTREAM_API_KEY (free at "
-            "https://aisstream.io/authenticate) or AISCAST_TOKEN in .env"
+            "https://aisstream.io/authenticate), AISCAST_TOKEN or OPENWATERS_ENABLED in .env"
         )
         return 1
 
@@ -91,6 +94,11 @@ async def run(settings: Settings) -> int:
     queue: asyncio.Queue = asyncio.Queue(maxsize=DEFAULT_QUEUE_SIZE)
     stats = IngestStats()
     clients = [AisFeedClient(f, queue, websocket_connector, stats=stats) for f in feeds]
+    if openwaters:
+        box = settings.gulf_bbox
+        query = urlencode({"bbox": f"{box.min_lat},{box.min_lon},{box.max_lat},{box.max_lon}"})
+        url = getattr(settings, "openwaters_url", "https://ais.openwaters.io/v1/stream")
+        clients.append(OpenWatersClient(f"{url}?{query}", queue, stats=stats))
     consumer = IngestConsumer(queue, session_factory, stats=stats)
 
     stop = asyncio.Event()
@@ -98,7 +106,7 @@ async def run(settings: Settings) -> int:
 
     logger.info(
         "starting ingest: feeds=%s bbox=%s",
-        [f.name for f in feeds],
+        [f.name for f in feeds] + (["openwaters"] if openwaters else []),
         settings.gulf_bbox,
     )
     tasks = [asyncio.create_task(c.run()) for c in clients]

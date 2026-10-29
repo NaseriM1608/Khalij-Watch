@@ -87,6 +87,11 @@ class AisPosition(Base):
     msg_type: Mapped[int | None] = mapped_column(Integer)
     # Required for attribution: aiscast re-serves per-source licences.
     source: Mapped[str] = mapped_column(String(32), nullable=False, default="unknown")
+    # Nullable for legacy rows: a timestamp without provenance is not a fresh fix.
+    timestamp_basis: Mapped[str | None] = mapped_column(String(32))
+    received_at: Mapped[dt.datetime | None] = mapped_column(DateTime(timezone=True))
+    provider_source: Mapped[str | None] = mapped_column(String(64))
+    provider_reencoded: Mapped[bool | None] = mapped_column(Boolean)
     plausibility_score: Mapped[float | None] = mapped_column(Float, index=True)
     # none_as_null: without it a clean row stores the JSON literal `null`,
     # which still satisfies "IS NOT NULL" and silently breaks anomaly queries.

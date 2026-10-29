@@ -68,6 +68,10 @@ def parse_envelope(
     """Turn one envelope into a domain object, or ``None`` if unusable."""
     message_type = envelope.get("MessageType")
     try:
+        if source == "openwaters":
+            from core.ais.openwaters import parse_event
+
+            return parse_event(envelope, now=now)
         if message_type in POSITION_TYPES:
             return parse_position(envelope, source=source, now=now)
         if message_type in STATIC_TYPES:

@@ -234,6 +234,20 @@ def test_reported_timestamp_is_preferred_when_sane():
     assert report.ts == dt.datetime(2026, 9, 10, 11, 59, 30, 123456, tzinfo=dt.UTC)
 
 
+def test_timestamp_provenance_preserves_provider_time_and_local_receipt():
+    report = parse_position(position_envelope(), source="aisstream", now=NOW)
+    assert report.timestamp_basis == "provider"
+    assert report.received_at == NOW
+
+
+def test_missing_provider_timestamp_is_not_eligible_for_motion():
+    envelope = position_envelope()
+    envelope["MetaData"].pop("time_utc")
+    report = parse_position(envelope, source="aisstream", now=NOW)
+    assert report.ts == NOW
+    assert report.timestamp_basis == "receipt_fallback"
+
+
 # --------------------------------------------------------------------------
 # Position parsing
 # --------------------------------------------------------------------------

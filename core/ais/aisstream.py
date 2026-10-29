@@ -135,9 +135,16 @@ def parse_position(
     if lat is None or lon is None:
         raise AisParseError(f"no usable position for MMSI {mmsi}")
 
+    received = now or dt.datetime.now(dt.UTC)
+    reported = parse_go_timestamp(metadata.get("time_utc"))
+    timestamp_basis = (
+        "provider"
+        if reported is not None and reported <= received + MAX_FUTURE_SKEW
+        else "receipt_fallback"
+    )
     return AisPositionReport(
         mmsi=mmsi,
-        ts=_resolve_timestamp(metadata, now or dt.datetime.now(dt.UTC)),
+        ts=_resolve_timestamp(metadata, received),
         lon=lon,
         lat=lat,
         source=source,
@@ -146,6 +153,8 @@ def parse_position(
         heading_deg=normalise_heading(body.get("TrueHeading")),
         nav_status=_small_int(body.get("NavigationalStatus"), 0, 15),
         msg_type=_small_int(body.get("MessageID"), 1, 27),
+        timestamp_basis=timestamp_basis,
+        received_at=received,
     )
 
 
