@@ -40,6 +40,26 @@ uv sync
 uv run python scripts/check_access.py
 ```
 
+## Run the console
+
+The API serves the built console from `web/dist`, so one process is enough.
+
+On Windows, install [uv](https://docs.astral.sh/uv/) once
+(`winget install --id astral-sh.uv -e`), then double-click `start.cmd` — or run
+`.\start.ps1` from a terminal. The first run builds the Python 3.12 environment
+from `uv.lock` and needs internet; later runs start in seconds. The console
+opens at http://127.0.0.1:8000.
+
+Without a `.env` the launcher shows the bundled snapshot and leaves live AIS
+off. Copy `.env.example` to `.env` to enable live feeds.
+
+Development keeps the two-process setup, with Vite proxying `/api` to the API:
+
+```powershell
+uv run uvicorn services.api.main:app --host 127.0.0.1 --port 8000
+cd web; npm run dev        # http://127.0.0.1:5173
+```
+
 ## Access checks
 
 `scripts/check_access.py` verifies every external dependency is reachable from this

@@ -26,6 +26,7 @@ from fastapi import FastAPI, HTTPException, Query, WebSocket, WebSocketDisconnec
 from fastapi import Path as PathParam
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from core.ais.landmask import point_in_polygon
 from core.ais.motion import MotionEstimate, estimate_motion
@@ -818,3 +819,12 @@ async def stream(websocket: WebSocket, bbox: str | None = None) -> None:
     except Exception:
         logger.exception("stream socket failed")
         await websocket.close()
+
+
+# The built console, when present, is served from this same origin so a shipped
+# copy needs no Node: one process, one port. Mounted last so /api and /ws match
+# their own routes first. During development `npm run dev` on :5173 still talks
+# to this API through Vite's proxy, and this mount is simply unused.
+_DIST = Path(__file__).resolve().parents[2] / "web" / "dist"
+if (_DIST / "index.html").is_file():
+    app.mount("/", StaticFiles(directory=_DIST, html=True), name="console")
